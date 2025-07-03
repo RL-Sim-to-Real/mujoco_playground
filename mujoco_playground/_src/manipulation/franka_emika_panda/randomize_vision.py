@@ -88,6 +88,7 @@ def domain_randomize(
     _, key = jax.random.split(rng, 2)
 
     #### Apearance ####
+    
     # Sample a random color for the box
     key_box, key_strip, key_floor, key = jax.random.split(key, 4)
     rgba = jp.array(
@@ -100,11 +101,20 @@ def domain_randomize(
         jp.array([strip_white, strip_white, strip_white, 1.0])
     )
 
-    # Sample a shade of gray
-    gray_scale = jax.random.uniform(key_floor, (), minval=0.0, maxval=0.25)
-    geom_rgba = geom_rgba.at[floor_geom_id].set(
-        jp.array([gray_scale, gray_scale, gray_scale, 1.0])
+    # Sample a shade of gray -- I think this is for the floor
+
+    # Randomize floor color
+    floor_color = jp.array(
+        [
+            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # R
+            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # G
+            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # B
+            1.0,  # Alpha
+        ]
     )
+
+    gray_scale = jax.random.uniform(key_floor, (), minval=0.0, maxval=0.25)
+    geom_rgba = geom_rgba.at[floor_geom_id].set(floor_color)
 
     mat_offset, num_geoms = 5, geom_rgba.shape[0]
     key_matid, key = jax.random.split(key)

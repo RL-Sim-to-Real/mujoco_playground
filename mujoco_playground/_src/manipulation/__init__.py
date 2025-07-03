@@ -25,6 +25,7 @@ from mujoco_playground._src.manipulation.aloha import single_peg_insertion as al
 from mujoco_playground._src.manipulation.franka_emika_panda import open_cabinet as panda_open_cabinet
 from mujoco_playground._src.manipulation.franka_emika_panda import pick as panda_pick
 from mujoco_playground._src.manipulation.franka_emika_panda import pick_cartesian as panda_pick_cartesian
+from mujoco_playground._src.manipulation.franka_emika_panda import pick_cartesian_modified as panda_pick_cartesian_modified
 from mujoco_playground._src.manipulation.franka_emika_panda_robotiq import push_cube as robotiq_push_cube
 from mujoco_playground._src.manipulation.leap_hand import reorient as leap_cube_reorient
 from mujoco_playground._src.manipulation.leap_hand import rotate_z as leap_rotate_z
@@ -38,6 +39,7 @@ _envs = {
     "PandaPickCube": panda_pick.PandaPickCube,
     "PandaPickCubeOrientation": panda_pick.PandaPickCubeOrientation,
     "PandaPickCubeCartesian": panda_pick_cartesian.PandaPickCubeCartesian,
+    "PandaPickCubeCartesianModified": panda_pick_cartesian_modified.PandaPickCubeCartesianModified,
     "PandaOpenCabinet": panda_open_cabinet.PandaOpenCabinet,
     "PandaRobotiqPushCube": robotiq_push_cube.PandaRobotiqPushCube,
     "LeapCubeReorient": leap_cube_reorient.CubeReorient,
@@ -48,6 +50,7 @@ _cfgs = {
     "AlohaHandOver": aloha_handover.default_config,
     "AlohaSinglePegInsertion": aloha_peg.default_config,
     "PandaPickCube": panda_pick.default_config,
+    "PandaPickCubeCartesianModified": panda_pick_cartesian_modified.default_config,
     "PandaPickCubeOrientation": panda_pick.default_config,
     "PandaPickCubeCartesian": panda_pick_cartesian.default_config,
     "PandaOpenCabinet": panda_open_cabinet.default_config,
