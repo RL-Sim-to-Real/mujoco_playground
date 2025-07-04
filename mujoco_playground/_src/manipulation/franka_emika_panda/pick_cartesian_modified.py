@@ -102,7 +102,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         / 'manipulation'
         / 'franka_emika_panda'
         / 'xmls'
-        / 'mjx_single_cube_camera.xml'
+        / 'mjx_single_cube_camera_modified.xml'
     )
     self._xml_path = xml_path.as_posix()
 
