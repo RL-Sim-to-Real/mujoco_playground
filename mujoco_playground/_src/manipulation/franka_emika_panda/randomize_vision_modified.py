@@ -21,7 +21,7 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 import numpy as np
 
-from mujoco_playground._src.manipulation.franka_emika_panda import pick_cartesian
+from mujoco_playground._src.manipulation.franka_emika_panda import pick_cartesian_modified as pick_cartesian
 
 
 def sample_light_position():
@@ -59,11 +59,10 @@ def domain_randomize(
     mjx_model: mjx.Model, num_worlds: int
 ) -> Tuple[mjx.Model, mjx.Model]:
   """Tile the necessary axes for the Madrona BatchRenderer."""
-  mj_model = pick_cartesian.PandaPickCubeCartesian().mj_model
+  mj_model = pick_cartesian.PandaPickCubeCartesianModified().mj_model
   floor_geom_id = mj_model.geom('floor').id
   box_geom_id = mj_model.geom('box').id
-  strip_geom_id = mj_model.geom('init_space').id
-
+  custom_wood_material_id = mj_model.material('custom_wood').id
   in_axes = jax.tree_util.tree_map(lambda x: None, mjx_model)
   in_axes = in_axes.tree_replace({
       'geom_rgba': 0,
@@ -90,31 +89,25 @@ def domain_randomize(
     #### Apearance ####
     
     # Sample a random color for the box
-    key_box, key_strip, key_floor, key = jax.random.split(key, 4)
+    key_box, key_floor, key = jax.random.split(key, 3)
     rgba = jp.array(
-        [jax.random.uniform(key_box, (), minval=0.5, maxval=1.0), 0.0, 0.0, 1.0]
+        [jax.random.uniform(key_box, (), minval=0.7, maxval=1.0), 0.0, 0.0, 1.0]
     )
     geom_rgba = mjx_model.geom_rgba.at[box_geom_id].set(rgba)
 
-    strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
-    geom_rgba = geom_rgba.at[strip_geom_id].set(
-        jp.array([strip_white, strip_white, strip_white, 1.0])
-    )
 
-    # Sample a shade of gray -- I think this is for the floor
+    # # strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
+    # # geom_rgba = geom_rgba.at[strip_geom_id].set(
+    # #     jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
+    # # )
+
+    # # Sample a shade of gray -- I think this is for the floor
 
     # Randomize floor color
-    floor_color = jp.array(
-        [
-            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # R
-            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # G
-            jax.random.uniform(key_floor, (), minval=0.0, maxval=0.3),  # B
-            1.0,  # Alpha
-        ]
-    )
-
-    gray_scale = jax.random.uniform(key_floor, (), minval=0.0, maxval=0.25)
-    geom_rgba = geom_rgba.at[floor_geom_id].set(floor_color)
+    # gray_scale = jax.random.uniform(key_floor, (), minval=0.25, maxval=0.75)
+    # geom_rgba = geom_rgba.at[floor_geom_id].set(
+    #     jp.array([gray_scale, gray_scale, gray_scale, 1.0])
+    # )
 
     mat_offset, num_geoms = 5, geom_rgba.shape[0]
     key_matid, key = jax.random.split(key)
@@ -126,7 +119,10 @@ def domain_randomize(
         -2
     )  # Use the above randomized colors
     geom_matid = geom_matid.at[floor_geom_id].set(-2)
-    geom_matid = geom_matid.at[strip_geom_id].set(-2)
+
+    # Set floor material to "custom_wood"
+
+    geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
 
     #### Cameras ####
     key_pos, key_ori, key = jax.random.split(key, 3)
