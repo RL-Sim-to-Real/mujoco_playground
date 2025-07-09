@@ -30,6 +30,7 @@ from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.manipulation.franka_emika_panda import pick
+import cv2
 
 
 def default_vision_config() -> config_dict.ConfigDict:
@@ -257,7 +258,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     """Runs one timestep of the environment's dynamics."""
     action_history = (
-        jp.roll(state.info['action_history'], 1).at[0].set(action[2])
+        jp.roll(state.info['action_history'], 1).at[0].set(action[3])
     )
     state.info['action_history'] = action_history
     # Add action delay
@@ -297,7 +298,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # Cartesian control
     increment = jp.zeros(4)
-    increment = increment.at[1:].set(action)  # set y, z and gripper commands.
+    increment = action  # directly set x, y, z and gripper commands.
     ctrl, new_tip_position, no_soln = self._move_tip(
         state.info['current_pos'],
         self._start_tip_transform[:3, :3],
@@ -435,7 +436,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
   @property
   def action_size(self) -> int:
-    return 3
+    return 4
 
   @property
   def xml_path(self) -> str:

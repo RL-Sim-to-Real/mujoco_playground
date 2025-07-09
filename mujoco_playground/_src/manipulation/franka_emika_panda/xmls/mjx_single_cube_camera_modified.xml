@@ -1,5 +1,5 @@
 <mujoco model="panda single cube camera">
-  <include file="mjx_panda.xml"/>
+  <include file="mjx_panda_modified.xml"/>
   <!-- For now, we copy over mjx_scene.xml to ensure there's no extra light source -->
   <statistic center="0.3 0 0.4" extent="1"/>
 
@@ -39,7 +39,7 @@
 
   <worldbody>
     <!-- Matching the Realsense D435 -->
-    <camera fovy="42" name="front" pos="1.176 0.001 0.483" xyaxes="0.006 1.000 -0.000 -0.720 0.004 0.694"/>
+    <!-- <camera fovy="42" name="front" pos="1.176 0.001 0.483" xyaxes="0.006 1.000 -0.000 -0.720 0.004 0.694"/> -->
     <geom name="floor" size="0 0 0.05" type="plane" material="custom_wood" contype="1"/>
 
     <body name="box" pos="1 0 0.03">
