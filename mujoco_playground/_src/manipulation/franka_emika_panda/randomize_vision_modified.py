@@ -130,10 +130,10 @@ def domain_randomize(
     assert (
         len(mjx_model.cam_pos) == 1
     ), f'Expected single camera, got {len(mjx_model.cam_pos)}'
-    cam_pos = mjx_model.cam_pos.at[0].set(mjx_model.cam_pos[0] + cam_offset)
-    cam_quat = mjx_model.cam_quat.at[0].set(
-        perturb_orientation(key_ori, mjx_model.cam_quat[0], 10)
-    )
+    cam_pos = mjx_model.cam_pos#.at[0].set(mjx_model.cam_pos[0] + cam_offset)
+    cam_quat = mjx_model.cam_quat#.at[0].set(
+        #perturb_orientation(key_ori, mjx_model.cam_quat[0], 10)
+    #)
 
     #### Lighting ####
     nlight = mjx_model.light_pos.shape[0]

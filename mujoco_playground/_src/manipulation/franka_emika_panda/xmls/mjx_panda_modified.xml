@@ -207,10 +207,9 @@
                       <geom mesh="link7_6" material="black" class="visual"/>
                       <geom mesh="link7_7" material="white" class="visual"/>
                       <geom mesh="link7_c" class="collision"/>
+
                       <body name="hand" pos="0 0 0.107" quat="0.9238795 0 0 -0.3826834">
                         <inertial mass="0.73" pos="-0.01 0 0.03" diaginertia="0.001 0.0025 0.0017"/>
-                        <!-- wrist mounted camera -->
-                        <camera fovy="42" name="mounted" pos="0 0 1.2" xyaxes="1 0 0 0 1 0"/>
                         <geom mesh="hand_0" material="off_white" class="visual"/>
                         <geom mesh="hand_1" material="black" class="visual"/>
                         <geom mesh="hand_2" material="black" class="visual"/>
@@ -220,6 +219,8 @@
                         <geom name="hand_capsule" type="capsule"
                          class="collision" conaffinity="1" size="0.04 0.06"
                          quat="1 1 0 0" pos="0 0 0.03"/>
+                      <!-- wrist mounted camera matching Intel D405 -->
+                      <camera fovy="58" name="mounted" pos="-0.05 0.01 0.01" xyaxes="0 -1 0 -0.966 0 0.259"/>
                         <site name="gripper" pos="0 0 0.1"/>
                         <body name="left_finger" pos="0 0 0.0584">
                           <inertial mass="0.015" pos="0 0 0" diaginertia="2.375e-6 2.375e-6 7.5e-7"/>

@@ -160,14 +160,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     # Expand floor size to non-zero so Madrona can render it
     mj_model.geom_size[mj_model.geom('floor').id, :2] = [5.0, 5.0]
 
-    # Make the finger pads white for increased visibility
-    mesh_id = mj_model.mesh('finger_1').id
-    geoms = [
-        idx
-        for idx, data_id in enumerate(mj_model.geom_dataid)
-        if data_id == mesh_id
-    ]
-    mj_model.geom_matid[geoms] = mj_model.mat('off_white').id
+    # # Make the finger pads white for increased visibility
+    # mesh_id = mj_model.mesh('finger_1').id
+    # geoms = [
+    #     idx
+    #     for idx, data_id in enumerate(mj_model.geom_dataid)
+    #     if data_id == mesh_id
+    # ]
+    # mj_model.geom_matid[geoms] = mj_model.mat('off_white').id
     return mj_model
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
@@ -266,7 +266,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     action_idx = jax.random.randint(
         key, (), minval=0, maxval=self._config.action_history_length
     )
-    action = action.at[2].set(state.info['action_history'][action_idx])
+    action = action.at[3].set(state.info['action_history'][action_idx])
 
     state.info['newly_reset'] = state.info['_steps'] == 0
 
