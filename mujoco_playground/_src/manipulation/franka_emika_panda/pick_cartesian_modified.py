@@ -128,7 +128,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       except ImportError:
         warnings.warn(
             'Madrona MJX not installed. Cannot use vision with'
-            ' PandaPickCubeCartesian.'
+            ' PandaPickCubeCartesianModified.'
         )
         return
       self.renderer = BatchRenderer(
@@ -161,13 +161,13 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     mj_model.geom_size[mj_model.geom('floor').id, :2] = [5.0, 5.0]
 
     # # Make the finger pads white for increased visibility
-    # mesh_id = mj_model.mesh('finger_1').id
-    # geoms = [
-    #     idx
-    #     for idx, data_id in enumerate(mj_model.geom_dataid)
-    #     if data_id == mesh_id
-    # ]
-    # mj_model.geom_matid[geoms] = mj_model.mat('off_white').id
+    mesh_id = mj_model.mesh('finger_1').id
+    geoms = [
+        idx
+        for idx, data_id in enumerate(mj_model.geom_dataid)
+        if data_id == mesh_id
+    ]
+    mj_model.geom_matid[geoms] = mj_model.mat('black').id
     return mj_model
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
@@ -178,7 +178,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane,
+        x_plane + jax.random.uniform(rng_box, (), minval=-r_range/2, maxval=r_range/2),
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])

@@ -216,7 +216,6 @@ def brax_vision_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256)
     rl_config.num_resets_per_eval = 1
     rl_config.max_grad_norm = 1.0
-    rl_config.action_size = 4
   else:
     raise NotImplementedError(f"Vision PPO params not tested for {env_name}")
 
