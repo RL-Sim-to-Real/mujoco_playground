@@ -76,6 +76,8 @@ def default_config():
       box_init_range=0.05,
       success_threshold=0.05,
       action_history_length=1,
+      actuator='position',
+      action='ik',
   )
   return config
 
@@ -109,7 +111,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     mj_model = self.modify_model(
         mujoco.MjModel.from_xml_string(
-            xml_path.read_text(), assets=panda.get_assets()
+            xml_path.read_text(), assets=panda.get_assets(actuator=config.actuator)
         )
     )
     mj_model.opt.timestep = config.sim_dt
@@ -161,13 +163,13 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     mj_model.geom_size[mj_model.geom('floor').id, :2] = [5.0, 5.0]
 
     # # Make the finger pads white for increased visibility
-    mesh_id = mj_model.mesh('finger_1').id
-    geoms = [
-        idx
-        for idx, data_id in enumerate(mj_model.geom_dataid)
-        if data_id == mesh_id
-    ]
-    mj_model.geom_matid[geoms] = mj_model.mat('black').id
+    # mesh_id = mj_model.mesh('finger_1').id
+    # geoms = [
+    #     idx
+    #     for idx, data_id in enumerate(mj_model.geom_dataid)
+    #     if data_id == mesh_id
+    # ]
+    # mj_model.geom_matid[geoms] = mj_model.mat('black').id
     return mj_model
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
@@ -436,7 +438,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
   @property
   def action_size(self) -> int:
-    return 4
+    if self._config.action == 'ik':
+      return 4
+    return -1
 
   @property
   def xml_path(self) -> str:
