@@ -1,0 +1,13 @@
+<mujoco>
+    <actuator>
+        <motor class="panda" name="actuator1" joint="joint1"/>
+        <motor class="panda" name="actuator2" joint="joint2"/>
+        <motor class="panda" name="actuator3" joint="joint3"/>
+        <motor class="panda" name="actuator4" joint="joint4"/>
+        <motor class="panda" name="actuator5" joint="joint5" forcerange="-12 12" gear="20"/>
+        <motor class="panda" name="actuator6" joint="joint6" forcerange="-12 12" gear="20"/>
+        <motor class="panda" name="actuator7" joint="joint7" forcerange="-12 12" gear="20"/>
+        <general class="panda" name="actuator8" joint="finger_joint1"
+         ctrlrange="0 0.04" gainprm="350 0 0" biasprm="0 -350 -10" forcerange="-200 200"/>
+    </actuator>
+</mujoco>
