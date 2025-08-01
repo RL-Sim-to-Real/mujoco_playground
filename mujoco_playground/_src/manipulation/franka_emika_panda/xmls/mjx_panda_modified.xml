@@ -260,6 +260,6 @@
     </equality>
     
     <!-- Include actuators -->
-     <include file="actuators/position.xml"/>
+     <include file="actuator.xml"/>
   </mujoco>
   

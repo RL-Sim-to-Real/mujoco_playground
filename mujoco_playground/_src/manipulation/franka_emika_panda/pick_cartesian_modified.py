@@ -260,7 +260,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     """Runs one timestep of the environment's dynamics."""
     action_history = (
-        jp.roll(state.info['action_history'], 1).at[0].set(action[3])
+        jp.roll(state.info['action_history'], 1).at[0].set(action[-1])
     )
     state.info['action_history'] = action_history
     # Add action delay
@@ -268,7 +268,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     action_idx = jax.random.randint(
         key, (), minval=0, maxval=self._config.action_history_length
     )
-    action = action.at[3].set(state.info['action_history'][action_idx])
+    action = action.at[-1].set(state.info['action_history'][action_idx])
 
     state.info['newly_reset'] = state.info['_steps'] == 0
 
@@ -299,16 +299,25 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     )
 
     # Cartesian control
-    increment = jp.zeros(4)
-    increment = action  # directly set x, y, z and gripper commands.
-    ctrl, new_tip_position, no_soln = self._move_tip(
-        state.info['current_pos'],
-        self._start_tip_transform[:3, :3],
-        data.ctrl,
-        increment,
-    )
+
+    if self._config.action == 'ik':
+      increment = jp.zeros(4)
+      increment = action  # directly set x, y, z and gripper commands.
+      ctrl, new_tip_position, no_soln = self._move_tip(
+          state.info['current_pos'],
+          self._start_tip_transform[:3, :3],
+          data.ctrl,
+          increment,
+      )
+      state.info.update({'current_pos': new_tip_position})
+    elif self._config.action in {'position', 'velocity', 'torque'}:
+      ctrl, no_soln = self._move_joints(data.ctrl, action)
+    else:
+      raise ValueError(f"Invalid action type: {self._config.action}")
+      
     ctrl = jp.clip(ctrl, self._lowers, self._uppers)
-    state.info.update({'current_pos': new_tip_position})
+    print(f'ctrl: {ctrl.shape}')
+
 
     # Simulator step
     data = mjx_env.step(self._mjx_model, data, ctrl, self.n_substeps)
@@ -436,10 +445,26 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     return new_ctrl, new_tip_pos, no_soln
 
+  def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
+    new_ctrl = current_ctrl
+    scaled_action = action[:-1] * self._config.action_scale
+    new_ctrl = new_ctrl.at[:7].set(scaled_action)
+    close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
+    jaw_action = jp.where(close_gripper, -1.0, 1.0)
+    claw_delta = jaw_action * 0.02  # up to 2 cm movement
+    new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
+    no_soln = jp.any(jp.isnan(new_ctrl))
+
+    return new_ctrl, no_soln
+    
+
   @property
   def action_size(self) -> int:
     if self._config.action == 'ik':
       return 4
+    elif self._config.action in {'position', 'velocity', 'torque'}:
+      return 8 # for all 8 joints
+    
     return -1
 
   @property
