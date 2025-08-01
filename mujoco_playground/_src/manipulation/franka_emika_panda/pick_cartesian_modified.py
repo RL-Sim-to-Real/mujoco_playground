@@ -81,6 +81,89 @@ def default_config():
   )
   return config
 
+def rgb_to_hsv(img):
+    # img: (..., 3), values in [0, 1]
+    r, g, b = img[..., 0], img[..., 1], img[..., 2]
+    maxc = jp.max(img, axis=-1)
+    minc = jp.min(img, axis=-1)
+    v = maxc
+    deltac = maxc - minc
+    s = jp.where(maxc == 0, 0, deltac / (maxc + 1e-8))
+    # Hue calculation
+    rc = (maxc - r) / (deltac + 1e-8)
+    gc = (maxc - g) / (deltac + 1e-8)
+    bc = (maxc - b) / (deltac + 1e-8)
+    h = jp.where(
+        deltac == 0,
+        0.0,
+        jp.where(
+            maxc == r,
+            (bc - gc) / 6.0,
+            jp.where(
+                maxc == g,
+                (2.0 + rc - bc) / 6.0,
+                (4.0 + gc - rc) / 6.0,
+            ),
+        ),
+    )
+    h = jp.mod(h, 1.0)
+    return jp.stack([h, s, v], axis=-1)
+
+def hsv_to_rgb(img):
+    # img: (..., 3), values in [0, 1]
+    h, s, v = img[..., 0], img[..., 1], img[..., 2]
+    i = jp.floor(h * 6.0)
+    f = h * 6.0 - i
+    i = i.astype(jp.int32)
+    p = v * (1.0 - s)
+    q = v * (1.0 - f * s)
+    t = v * (1.0 - (1.0 - f) * s)
+    i_mod = i % 6
+    conditions = [
+        (i_mod == 0, jp.stack([v, t, p], axis=-1)),
+        (i_mod == 1, jp.stack([q, v, p], axis=-1)),
+        (i_mod == 2, jp.stack([p, v, t], axis=-1)),
+        (i_mod == 3, jp.stack([p, q, v], axis=-1)),
+        (i_mod == 4, jp.stack([t, p, v], axis=-1)),
+        (i_mod == 5, jp.stack([v, p, q], axis=-1)),
+    ]
+    rgb = jp.zeros_like(img)
+    for cond, val in conditions:
+        rgb = jp.where(cond[..., None], val, rgb)
+    return rgb
+
+
+def augment_image(rng, 
+                  img, 
+                  contrast_range=(0.3, 0.6),
+                  saturation_range=(0.8, 1.2),
+                  hue_range=(-0.05, 0.05)):
+  # adjust contrast
+  rng, rng_c = jax.random.split(rng)
+  contrast = jax.random.uniform(rng_c, (), minval=contrast_range[0], maxval=contrast_range[1])
+  mean = jp.mean(img, axis=(0, 1), keepdims=True)
+  img = (img - mean) * contrast + mean
+
+
+  # Random saturation (convert to grayscale and interpolate)
+  rng, rng_s = jax.random.split(rng)
+  saturation = jax.random.uniform(rng_s, (), minval=saturation_range[0], maxval=saturation_range[1])
+  gray = jp.mean(img, axis=-1, keepdims=True)
+  img = (img - gray) * saturation + gray
+
+  # Random hue (shift in HSV space)
+  rng, rng_h = jax.random.split(rng)
+  hue = jax.random.uniform(rng_h, (), minval=hue_range[0], maxval=hue_range[1])
+  img_hsv = rgb_to_hsv(img)
+  img_hsv = img_hsv.at[..., 0].add(hue)
+  img_hsv = img_hsv.at[..., 0].set(jp.mod(img_hsv[..., 0], 1.0))  # wrap hue
+  img = hsv_to_rgb(img_hsv)
+
+  img = jp.clip(img, 0, 1)
+  return img
+
+
+
 
 def adjust_brightness(img, scale):
   """Adjusts the brightness of an image by scaling the pixel values."""
@@ -239,7 +322,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     obs = self._get_obs(data, info)
     obs = jp.concat([obs, jp.zeros(1), jp.zeros(3)], axis=0)
     if self._vision:
-      rng_brightness, rng = jax.random.split(rng)
+      rng_brightness, rng_img, rng = jax.random.split(rng, num=3)
       brightness = jax.random.uniform(
           rng_brightness,
           (1,),
@@ -247,12 +330,13 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           maxval=self._config.obs_noise.brightness[1],
       )
       info.update({'brightness': brightness})
-
+      info.update({'rng_img': rng_img}) 
       render_token, rgb, _ = self.renderer.init(data, self._mjx_model)
       info.update({'render_token': render_token})
 
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
       obs = adjust_brightness(obs, brightness)
+      obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs}
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -316,7 +400,6 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       raise ValueError(f"Invalid action type: {self._config.action}")
       
     ctrl = jp.clip(ctrl, self._lowers, self._uppers)
-    print(f'ctrl: {ctrl.shape}')
 
 
     # Simulator step
@@ -385,6 +468,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       _, rgb, _ = self.renderer.render(state.info['render_token'], data)
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
       obs = adjust_brightness(obs, state.info['brightness'])
+      # augment image
+      rng_img = state.info['rng_img']  # Use the same RNG as in reset for consistency
+      obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs}
 
     return state.replace(
