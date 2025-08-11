@@ -63,6 +63,8 @@ def domain_randomize(
   floor_geom_id = mj_model.geom('floor').id
   box_geom_id = mj_model.geom('box').id
   custom_wood_material_id = mj_model.material('custom_wood').id
+  strip_geom_id = mj_model.geom('init_space').id
+
   in_axes = jax.tree_util.tree_map(lambda x: None, mjx_model)
   in_axes = in_axes.tree_replace({
       'geom_rgba': 0,
@@ -89,25 +91,25 @@ def domain_randomize(
     #### Apearance ####
     
     # Sample a random color for the box
-    key_box, key_floor, key = jax.random.split(key, 3)
+    key_box, key_strip, key_floor, key = jax.random.split(key, 4)
     rgba = jp.array(
         [jax.random.uniform(key_box, (), minval=0.7, maxval=1.0), 0.0, 0.0, 1.0]
     )
     geom_rgba = mjx_model.geom_rgba.at[box_geom_id].set(rgba)
 
 
-    # # strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
-    # # geom_rgba = geom_rgba.at[strip_geom_id].set(
-    # #     jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
-    # # )
+    strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
+    geom_rgba = geom_rgba.at[strip_geom_id].set(
+        jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
+    )
 
     # # Sample a shade of gray -- I think this is for the floor
 
     # Randomize floor color
-    # gray_scale = jax.random.uniform(key_floor, (), minval=0.25, maxval=0.75)
-    # geom_rgba = geom_rgba.at[floor_geom_id].set(
-    #     jp.array([gray_scale, gray_scale, gray_scale, 1.0])
-    # )
+    gray_scale = jax.random.uniform(key_floor, (), minval=0.0, maxval=0.25)
+    geom_rgba = geom_rgba.at[floor_geom_id].set(
+        jp.array([gray_scale, gray_scale, gray_scale, 1.0])
+    )
 
     mat_offset, num_geoms = 5, geom_rgba.shape[0]
     key_matid, key = jax.random.split(key)
@@ -119,10 +121,10 @@ def domain_randomize(
         -2
     )  # Use the above randomized colors
     geom_matid = geom_matid.at[floor_geom_id].set(-2)
-
+    geom_matid = geom_matid.at[strip_geom_id].set(-2)
     # Set floor material to "custom_wood"
 
-    geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
+    # geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
 
     #### Cameras ####
     key_pos, key_ori, key = jax.random.split(key, 3)

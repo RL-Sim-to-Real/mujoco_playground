@@ -44,7 +44,7 @@ def get_assets(actuator: str="position") -> Dict[str, bytes]:
   mjx_env.update_assets(assets, path, "*.xml")
   mjx_env.update_assets(assets, path, f"actuators/{actuator}/actuator.xml") # include actuators file
   # add custom texture asset
-  mjx_env.update_assets(assets, path, "texture.png")
+  mjx_env.update_assets(assets, path, "texture*.png")
   path = mjx_env.MENAGERIE_PATH / _MENAGERIE_FRANKA_DIR
   mjx_env.update_assets(assets, path, "*.xml")
   mjx_env.update_assets(assets, path / "assets")

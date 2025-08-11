@@ -135,7 +135,7 @@ def hsv_to_rgb(img):
 
 def augment_image(rng, 
                   img, 
-                  contrast_range=(0.3, 0.6),
+                  contrast_range=(0.8, 1.2),
                   saturation_range=(0.8, 1.2),
                   hue_range=(-0.05, 0.05)):
   # adjust contrast
@@ -151,13 +151,13 @@ def augment_image(rng,
   gray = jp.mean(img, axis=-1, keepdims=True)
   img = (img - gray) * saturation + gray
 
-  # Random hue (shift in HSV space)
-  rng, rng_h = jax.random.split(rng)
-  hue = jax.random.uniform(rng_h, (), minval=hue_range[0], maxval=hue_range[1])
-  img_hsv = rgb_to_hsv(img)
-  img_hsv = img_hsv.at[..., 0].add(hue)
-  img_hsv = img_hsv.at[..., 0].set(jp.mod(img_hsv[..., 0], 1.0))  # wrap hue
-  img = hsv_to_rgb(img_hsv)
+  # # Random hue (shift in HSV space)
+  # rng, rng_h = jax.random.split(rng)
+  # hue = jax.random.uniform(rng_h, (), minval=hue_range[0], maxval=hue_range[1])
+  # img_hsv = rgb_to_hsv(img)
+  # img_hsv = img_hsv.at[..., 0].add(hue)
+  # img_hsv = img_hsv.at[..., 0].set(jp.mod(img_hsv[..., 0], 1.0))  # wrap hue
+  # img = hsv_to_rgb(img_hsv)
 
   img = jp.clip(img, 0, 1)
   return img
