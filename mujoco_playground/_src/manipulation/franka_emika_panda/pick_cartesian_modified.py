@@ -77,7 +77,7 @@ def default_config():
       success_threshold=0.05,
       action_history_length=1,
       actuator='position',
-      action='ik',
+      action='cartesian_increment',
   )
   return config
 
@@ -263,7 +263,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + jax.random.uniform(rng_box, (), minval=-r_range/2, maxval=r_range/2),
+        x_plane,
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
@@ -296,6 +296,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # initialize env state and info
     metrics = {
+        'success': jp.array(0.0, dtype=float),
+        'floor_collision': jp.array(0.0, dtype=float),
+        'box_collision': jp.array(0.0, dtype=float),
         'out_of_bounds': jp.array(0.0),
         **{
             f'reward/{k}': 0.0
@@ -384,7 +387,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # Cartesian control
 
-    if self._config.action == 'ik':
+    if self._config.action == 'cartesian_increment':
       increment = jp.zeros(4)
       increment = action  # directly set x, y, z and gripper commands.
       ctrl, new_tip_position, no_soln = self._move_tip(
@@ -446,6 +449,11 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
+
+
+    state.metrics.update(success=success.astype(float))
+
+    state.metrics.update(box_collision= jp.array(hand_box, dtype=float))
 
     done = (
         out_of_bounds
@@ -546,7 +554,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
   @property
   def action_size(self) -> int:
-    if self._config.action == 'ik':
+    if self._config.action == 'cartesian_increment':
       return 4
     elif self._config.action in {'position', 'velocity', 'torque'}:
       return 8 # for all 8 joints
