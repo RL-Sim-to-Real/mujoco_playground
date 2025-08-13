@@ -30,7 +30,7 @@ from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.manipulation.franka_emika_panda import pick
-import cv2
+
 
 
 def default_vision_config() -> config_dict.ConfigDict:
