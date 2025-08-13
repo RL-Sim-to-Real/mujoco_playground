@@ -296,14 +296,16 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # initialize env state and info
     metrics = {
-        'success': jp.array(0.0, dtype=float),
-        'floor_collision': jp.array(0.0, dtype=float),
-        'box_collision': jp.array(0.0, dtype=float),
+        # 'success': jp.array(0.0, dtype=float),
+        # 'floor_collision': jp.array(0.0, dtype=float),
+        # 'box_collision': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
         **{
             f'reward/{k}': 0.0
             for k in self._config.reward_config.reward_scales.keys()
         },
+        'reward/success': jp.array(0.0),
+        'reward/stat_box_collision': jp.array(0.0),
     }
 
     info = {
@@ -397,7 +399,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           increment,
       )
       state.info.update({'current_pos': new_tip_position})
-    elif self._config.action in {'position', 'velocity', 'torque'}:
+    elif self._config.action == 'joint_increment':
       ctrl, no_soln = self._move_joints(data.ctrl, action)
     else:
       raise ValueError(f"Invalid action type: {self._config.action}")
@@ -448,12 +450,13 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
+
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
-
-
-    state.metrics.update(success=success.astype(float))
-
-    state.metrics.update(box_collision= jp.array(hand_box, dtype=float))
+    state.metrics.update({
+        'reward/stat_box_collision': \
+          (1 - raw_rewards['no_box_collision']).astype(float), # this is not a reward! this is a workaround
+        'reward/success': success.astype(float),
+    })
 
     done = (
         out_of_bounds
@@ -541,8 +544,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
   def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
     new_ctrl = current_ctrl
-    scaled_action = action[:-1] * self._config.action_scale
-    new_ctrl = new_ctrl.at[:7].set(scaled_action)
+    scaled_action_increment = action[:-1] * self._config.action_scale
+    new_ctrl = new_ctrl.at[:7].add(scaled_action_increment)
     close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
     jaw_action = jp.where(close_gripper, -1.0, 1.0)
     claw_delta = jaw_action * 0.02  # up to 2 cm movement
@@ -556,7 +559,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   def action_size(self) -> int:
     if self._config.action == 'cartesian_increment':
       return 4
-    elif self._config.action in {'position', 'velocity', 'torque'}:
+    elif self._config.action == 'joint_increment':
       return 8 # for all 8 joints
     
     return -1
