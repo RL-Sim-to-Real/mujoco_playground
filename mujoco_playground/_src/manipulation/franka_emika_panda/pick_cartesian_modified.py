@@ -71,6 +71,7 @@ def default_config():
           success_reward=2.0,
       ),
       vision=False,
+      proprioception=False,
       vision_config=default_vision_config(),
       obs_noise=config_dict.create(brightness=[1.0, 1.0]),
       box_init_range=0.05,
@@ -182,6 +183,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     mjx_env.MjxEnv.__init__(self, config, config_overrides)
     self._vision = config.vision
+    self._proprioception = config.proprioception
 
     xml_path = (
         mjx_env.ROOT_PATH
@@ -343,6 +345,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = adjust_brightness(obs, brightness)
       obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs}
+      if self._proprioception:
+        obs["_prop"] = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size)])
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
 
@@ -399,7 +403,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           increment,
       )
       state.info.update({'current_pos': new_tip_position})
-    elif self._config.action == 'joint_increment':
+    elif self._config.action in {'joint_increment', 'joint'}:
       ctrl, no_soln = self._move_joints(data.ctrl, action)
     else:
       raise ValueError(f"Invalid action type: {self._config.action}")
@@ -482,7 +486,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       # augment image
       rng_img = state.info['rng_img']  # Use the same RNG as in reset for consistency
       obs = augment_image(rng_img, img=obs)
-      obs = {'pixels/view_0': obs}
+      obs = {'pixels/view_0': obs }
+      if self._proprioception:
+        obs["_prop"] = jp.concatenate([data.qpos, data.qvel, action])
 
     return state.replace(
         data=data,
@@ -544,8 +550,13 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
   def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
     new_ctrl = current_ctrl
-    scaled_action_increment = action[:-1] * self._config.action_scale
-    new_ctrl = new_ctrl.at[:7].add(scaled_action_increment)
+    scaled_action = action[:-1] * self._config.action_scale
+    if self._config.action == 'joint_increment':
+      # Incremental joint control.
+      new_ctrl = new_ctrl.at[:7].add(scaled_action)
+    elif self._config.action == 'joint':
+      # Absolute joint control.
+      new_ctrl = new_ctrl.at[:7].set(scaled_action)
     close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
     jaw_action = jp.where(close_gripper, -1.0, 1.0)
     claw_delta = jaw_action * 0.02  # up to 2 cm movement
@@ -559,7 +570,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   def action_size(self) -> int:
     if self._config.action == 'cartesian_increment':
       return 4
-    elif self._config.action == 'joint_increment':
+    elif self._config.action in {'joint_increment', 'joint'}:
       return 8 # for all 8 joints
     
     return -1
