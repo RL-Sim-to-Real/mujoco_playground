@@ -265,7 +265,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane,
+        x_plane + jax.random.uniform(rng_box, (), minval=-0.02, maxval=0.02), # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
@@ -298,7 +298,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # initialize env state and info
     metrics = {
-        # 'success': jp.array(0.0, dtype=float),
+        'success': jp.array(0.0, dtype=float),
         # 'floor_collision': jp.array(0.0, dtype=float),
         # 'box_collision': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
@@ -306,7 +306,6 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
             f'reward/{k}': 0.0
             for k in self._config.reward_config.reward_scales.keys()
         },
-        'reward/success': jp.array(0.0),
         'reward/stat_box_collision': jp.array(0.0),
     }
 
@@ -346,7 +345,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs}
       if self._proprioception:
-        obs["_prop"] = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size)])
+        _prop = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size)])
+
+        obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.001 # add noise
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
 
@@ -454,12 +455,11 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
-
+    state.metrics.update(success=success.astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
     state.metrics.update({
         'reward/stat_box_collision': \
           (1 - raw_rewards['no_box_collision']).astype(float), # this is not a reward! this is a workaround
-        'reward/success': success.astype(float),
     })
 
     done = (
@@ -488,7 +488,11 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs }
       if self._proprioception:
-        obs["_prop"] = jp.concatenate([data.qpos, data.qvel, action])
+        state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
+         
+        _prop = jp.concatenate([data.qpos, data.qvel, action]) ## Add noise for simtoreal
+        noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
+        obs["_prop"] = noisy_prop
 
     return state.replace(
         data=data,
@@ -586,3 +590,29 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   @property
   def mjx_model(self) -> mjx.Model:
     return self._mjx_model
+
+
+if __name__ == '__main__':
+  # For testing purposes, you can instantiate the environment like this:
+  xml_path = (
+        mjx_env.ROOT_PATH
+        / 'manipulation'
+        / 'franka_emika_panda'
+        / 'xmls'
+        / 'mjx_single_cube_camera_modified.xml'
+    )
+
+  # Load the model with assets
+  mj_model = mujoco.MjModel.from_xml_string(
+      xml_path.read_text(), assets=panda.get_assets(actuator="velocity")
+  )
+
+  mj_data = mujoco.MjData(mj_model)
+
+  import mujoco.viewer
+  # Launch the viewer
+  with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
+      while viewer.is_running():
+          # step the simulation
+          mujoco.mj_step(mj_model, mj_data)
+          viewer.sync()
