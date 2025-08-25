@@ -104,6 +104,7 @@ class PandaBase(mjx_env.MjxEnv):
     self._mocap_target = self._mj_model.body("mocap_target").mocapid
     self._floor_geom = self._mj_model.geom("floor").id
     self._init_q = self._mj_model.keyframe(keyframe).qpos
+    print("self._init_q:", self._init_q)
     self._init_obj_pos = jp.array(
         self._init_q[self._obj_qposadr : self._obj_qposadr + 3],
         dtype=jp.float32,

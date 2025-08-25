@@ -239,7 +239,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     self._guide_ctrl = self._mj_model.keyframe('picked').ctrl
     # Use forward kinematics to init cartesian control
     self._start_tip_transform = panda_kinematics.compute_franka_fk(
-        self._init_ctrl[:7]
+        # self._init_ctrl[:7] use qpos instead
+        self._init_q[:7]
     )
     self._sample_orientation = False
 
