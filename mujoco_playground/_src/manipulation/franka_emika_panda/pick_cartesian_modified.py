@@ -300,14 +300,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     # initialize env state and info
     metrics = {
         'success': jp.array(0.0, dtype=float),
-        # 'floor_collision': jp.array(0.0, dtype=float),
-        # 'box_collision': jp.array(0.0),
+        'floor_collision': jp.array(0.0, dtype=float),
+        'cube_collision': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
         **{
             f'reward/{k}': 0.0
             for k in self._config.reward_config.reward_scales.keys()
         },
-        'reward/stat_box_collision': jp.array(0.0),
+        # 'reward/stat_box_collision': jp.array(0.0),
     }
 
     info = {
@@ -456,12 +456,20 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
-    state.metrics.update(success=success.astype(float))
+    state.metrics.update(success=jp.where(newly_reset, 0.0, success.astype(float)))
+    state.metrics.update(cube_collision=hand_box.astype(float)) # log collision only if lift wasn't successfull
+    hand_floor_collision = [
+        collision.geoms_colliding(data, self._floor_geom, g)
+        for g in [
+            self._left_finger_geom,
+            self._right_finger_geom,
+            self._hand_geom,
+        ]
+    ]
+
+    floor_collision = sum(hand_floor_collision) > 0
+    state.metrics.update(floor_collision=floor_collision.astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
-    state.metrics.update({
-        'reward/stat_box_collision': \
-          (1 - raw_rewards['no_box_collision']).astype(float), # this is not a reward! this is a workaround
-    })
 
     done = (
         out_of_bounds
@@ -469,6 +477,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         | jp.isnan(data.qvel).any()
         | success
     )
+
 
     # Ensure exact sync between newly_reset and the autoresetwrapper.
     state.info['_steps'] += self._config.action_repeat
