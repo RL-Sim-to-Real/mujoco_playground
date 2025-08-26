@@ -457,7 +457,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
     state.metrics.update(success=jp.where(newly_reset, 0.0, success.astype(float)))
-    state.metrics.update(cube_collision=hand_box.astype(float)) # log collision only if lift wasn't successfull
+    finger_collision: bool = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) ^\
+        collision.geoms_colliding(data, self._box_geom, self._right_finger_geom) # if it's not grasping it's a collisiong
+    state.metrics.update(cube_collision=(hand_box|finger_collision).astype(float)) # log collision only if lift wasn't successfull
     hand_floor_collision = [
         collision.geoms_colliding(data, self._floor_geom, g)
         for g in [
