@@ -324,6 +324,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         'action_history': jp.zeros((
             self._config.action_history_length,
         )),  # Gripper only
+        'prev_qacc': jp.zeros(self._mjx_model.nv),
     }
 
     reward, done = jp.zeros(2)
@@ -468,7 +469,19 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
             self._hand_geom,
         ]
     ]
-
+    current_qacc = data.qacc
+    dt = self._config.ctrl_dt
+    
+    # Jerk is rate of change of acceleration
+    jerk = jp.linalg.norm((current_qacc - state.info['prev_qacc']) / dt)
+    jerk = jp.where(state.info['newly_reset'], 0.0, jerk)
+    
+    # Update acceleration history
+    state.info['prev_qacc'] = current_qacc
+    
+    # Update metrics
+    state.metrics.update(jerk=jerk.astype(float))
+    
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
     state.metrics.update(success=success.astype(float))
