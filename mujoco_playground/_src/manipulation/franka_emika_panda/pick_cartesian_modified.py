@@ -299,15 +299,17 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # initialize env state and info
     metrics = {
-        'success': jp.array(0.0, dtype=float),
         'floor_collision': jp.array(0.0, dtype=float),
         'cube_collision': jp.array(0.0),
+        'jerk': jp.array(0.0),
+        'success': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
         **{
             f'reward/{k}': 0.0
             for k in self._config.reward_config.reward_scales.keys()
         },
-        # 'reward/stat_box_collision': jp.array(0.0),
+        'reward/success': jp.array(0.0),
+        'reward/lifted': jp.array(0.0),
     }
 
     info = {
@@ -438,9 +440,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # Sparse rewards
     box_pos = data.xpos[self._obj_body]
-    total_reward += (
-        box_pos[2] > 0.05
-    ) * self._config.reward_config.lifted_reward
+    lifted = (box_pos[2] > 0.05) * self._config.reward_config.lifted_reward
+    total_reward += lifted
     success = self._get_success(data, state.info)
     total_reward += success * self._config.reward_config.success_reward
 
@@ -456,7 +457,6 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
-    state.metrics.update(success=jp.where(newly_reset, 0.0, success.astype(float)))
     finger_collision: bool = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) ^\
         collision.geoms_colliding(data, self._box_geom, self._right_finger_geom) # if it's not grasping it's a collisiong
     state.metrics.update(cube_collision=(hand_box|finger_collision).astype(float)) # log collision only if lift wasn't successfull
@@ -471,7 +471,12 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
+    state.metrics.update(success=success.astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
+    state.metrics.update({
+        'reward/lifted': lifted.astype(float),
+        'reward/success': (success * self._config.reward_config.success_reward).astype(float),
+    })
 
     done = (
         out_of_bounds
