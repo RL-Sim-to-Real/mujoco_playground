@@ -519,8 +519,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
-         
-        _prop = jp.concatenate([data.qpos, data.qvel, action]) ## Add noise for simtoreal
+        grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
+            collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
+        _prop = jp.concatenate([data.qpos, data.qvel, action, grasp.astype(float)]) ## Add noise for simtoreal
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
         obs["_prop"] = noisy_prop
 
