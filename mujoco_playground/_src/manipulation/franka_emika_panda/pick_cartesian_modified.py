@@ -348,9 +348,11 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = adjust_brightness(obs, brightness)
       obs = augment_image(rng_img, img=obs)
       obs = {'pixels/view_0': obs}
+      grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
+          collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
-        _prop = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size)])
 
+        _prop = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.001 # add noise
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -509,6 +511,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     obs = self._get_obs(data, state.info)
     obs = jp.concat([obs, no_soln.reshape(1), action], axis=0)
+
+    grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
+        collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
     if self._vision:
       _, rgb, _ = self.renderer.render(state.info['render_token'], data)
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
@@ -519,9 +524,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
-        grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
-            collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
-        _prop = jp.concatenate([data.qpos, data.qvel, action, grasp.astype(float)]) ## Add noise for simtoreal
+
+        _prop = jp.concatenate([data.qpos, data.qvel, action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
         obs["_prop"] = noisy_prop
 
