@@ -31,7 +31,7 @@ from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.manipulation.franka_emika_panda import pick
 
-
+GEAR = np.array([150.0, 150.0, 150.0, 150.0, 20.0, 20.0, 20.0])
 
 def default_vision_config() -> config_dict.ConfigDict:
   return config_dict.create(
@@ -207,6 +207,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     # Set gripper in sight of camera
     self._post_init(obj_name='box', keyframe='low_home')
     self._box_geom = self._mj_model.geom('box').id
+    self._max_torque = 1.0 # for torque control
+    self._gear = GEAR
 
     if self._vision:
       try:
@@ -286,7 +288,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         jp.zeros(self._mjx_model.nv, dtype=float),
         ctrl=self._init_ctrl,
     )
-
+    
     target_quat = jp.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     data = data.replace(
         mocap_quat=data.mocap_quat.at[self._mocap_target, :].set(target_quat)
@@ -352,7 +354,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
 
-        _prop = jp.concatenate([data.qpos, data.qvel, jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.001 # add noise
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -486,7 +488,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
-    state.metrics.update(success=success.astype(float))
+    state.metrics.update(success=jp.where(to_sample, 0.0, success).astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
     state.metrics.update({
         'reward/lifted': lifted.astype(float),
@@ -511,7 +513,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     obs = self._get_obs(data, state.info)
     obs = jp.concat([obs, no_soln.reshape(1), action], axis=0)
-
+  
     grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
         collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
     if self._vision:
@@ -525,7 +527,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
 
-        _prop = jp.concatenate([data.qpos, data.qvel, action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        print(_prop.shape)
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
         obs["_prop"] = noisy_prop
 
@@ -596,6 +599,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     elif self._config.action == 'joint':
       # Absolute joint control.
       new_ctrl = new_ctrl.at[:7].set(scaled_action)
+      if self._config.actuator == 'torque':
+        new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
+                                                -self._max_torque / self._gear, self._max_torque / self._gear))
     close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
     jaw_action = jp.where(close_gripper, -1.0, 1.0)
     claw_delta = jaw_action * 0.02  # up to 2 cm movement
@@ -639,7 +645,7 @@ if __name__ == '__main__':
 
   # Load the model with assets
   mj_model = mujoco.MjModel.from_xml_string(
-      xml_path.read_text(), assets=panda.get_assets(actuator="velocity")
+      xml_path.read_text(), assets=panda.get_assets(actuator="torque")
   )
 
   mj_data = mujoco.MjData(mj_model)
