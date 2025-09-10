@@ -207,7 +207,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     # Set gripper in sight of camera
     self._post_init(obj_name='box', keyframe='low_home')
     self._box_geom = self._mj_model.geom('box').id
-    self._max_torque = 1.0 # for torque control
+    self._max_torque = 8.0 # for torque control
     self._gear = GEAR
 
     if self._vision:
@@ -326,7 +326,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         'action_history': jp.zeros((
             self._config.action_history_length,
         )),  # Gripper only
-        'prev_qacc': jp.zeros(self._mjx_model.nv),
+        'prev_qacc': jp.zeros(7),
     }
 
     reward, done = jp.zeros(2)
@@ -354,7 +354,8 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
 
-        _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        _prop = jp.concatenate([data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.001 # add noise
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
@@ -473,7 +474,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
             self._hand_geom,
         ]
     ]
-    current_qacc = data.qacc
+    current_qacc = data.qacc[:7]
     dt = self._config.ctrl_dt
     
     # Jerk is rate of change of acceleration
@@ -527,8 +528,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
 
-        _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
-        print(_prop.shape)
+        _prop = jp.concatenate([data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
         obs["_prop"] = noisy_prop
 
