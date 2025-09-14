@@ -72,6 +72,7 @@ def default_config():
       ),
       vision=False,
       proprioception=False,
+      full_proprioception=False,
       vision_config=default_vision_config(),
       obs_noise=config_dict.create(brightness=[1.0, 1.0]),
       box_init_range=0.05,
@@ -184,6 +185,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     mjx_env.MjxEnv.__init__(self, config, config_overrides)
     self._vision = config.vision
     self._proprioception = config.proprioception
+    self._full_proprioception = config.full_proprioception
 
     xml_path = (
         mjx_env.ROOT_PATH
@@ -244,6 +246,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         # self._init_ctrl[:7] use qpos instead
         self._init_q[:7]
     )
+
     self._sample_orientation = False
 
   def modify_model(self, mj_model: mujoco.MjModel):
@@ -353,12 +356,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
           collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
+        if self._full_proprioception:
+          _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]])
+        else:
+          _prop = jp.concatenate([data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
 
-        _prop = jp.concatenate([data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
 
-        obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.001 # add noise
-
-    return mjx_env.State(data, obs, reward, done, metrics, info)
+    return mjx_env.State(data, obs, reward, done, metrics, info)  
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     """Runs one timestep of the environment's dynamics."""
@@ -527,9 +532,11 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
-
-        _prop = jp.concatenate([data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
-        noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.001
+        if self._full_proprioception:
+          obs['_prop'] = jp.concatenate([data.qpos[:7], data.qvel[:7], action, grasp.astype(float)[..., None]])
+        else:
+          _prop = jp.concatenate([data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+        noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
         obs["_prop"] = noisy_prop
 
     return state.replace(
