@@ -76,6 +76,8 @@ def default_config():
       vision_config=default_vision_config(),
       obs_noise=config_dict.create(brightness=[1.0, 1.0]),
       box_init_range=0.05,
+      box_init_range_y=0.05,
+      hide_white_strip=True,
       success_threshold=0.05,
       action_history_length=1,
       actuator='position',
@@ -266,12 +268,35 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
     x_plane = self._start_tip_transform[0, 3] - 0.03  # Account for finite gain
+    # randomize end effector and white strip position
+    rng, rng_plane = jax.random.split(rng)
+    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.2, maxval=0.0)
 
+ 
+
+    # set initial pose to new plane
+    reset_joint_pos, _, _ = self._move_tip_reset(
+        target_tip_pose=jp.asarray([x_plane, 0.0, 0.2]),
+        current_tip_rot = self._start_tip_transform[:3, :3],
+        current_jp=jp.asarray(self._init_q[:8]) # careful with this
+    )
+    init_q = (
+        jp.array(self._init_q)
+        .at[self._robot_arm_qposadr]
+        .set(reset_joint_pos[:7])  # only move arm, not fingers
+    )
+    if self._config.actuator == "position":
+      init_ctrl0 = reset_joint_pos
+    else:
+      init_ctrl0 = jp.asarray(self._init_ctrl)
+
+    
+    
     # intialize box position
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + jax.random.uniform(rng_box, (), minval=-0.02, maxval=0.02), # randomize about white strip
+        x_plane + jax.random.uniform(rng_box, (), minval=-self._config.box_init_range_y, maxval=self._config.box_init_range_y), # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
@@ -281,17 +306,25 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     # initialize pipeline state
     init_q = (
-        jp.array(self._init_q)
+        jp.array(init_q) # build on top of previous init_q
         .at[self._obj_qposadr : self._obj_qposadr + 3]
         .set(box_pos)
     )
+    
     data = mjx_env.init(
         self._mjx_model,
         init_q,
         jp.zeros(self._mjx_model.nv, dtype=float),
-        ctrl=self._init_ctrl,
+        ctrl=init_ctrl0,
     )
     
+    # reposition the white strip to be under the end effector
+    # self._white_strip_geom = self._mj_model.geom("white_strip").id
+    # self._mj_model.geom_rgba[self._white_strip_geom, 3] = 0.0 if self._config.hide_white_strip else 1.0  # Set alpha to 0 for invisibility
+    # data = data.replace(
+    #   xpos=data.xpos.at[self._white_strip_geom, 0].set(x_plane)
+    # )
+
     target_quat = jp.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     data = data.replace(
         mocap_quat=data.mocap_quat.at[self._mocap_target, :].set(target_quat)
@@ -301,6 +334,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       data = data.replace(
           mocap_pos=data.mocap_pos.at[self._mocap_target, :].set(target_pos)
       )
+
+    # step simulator
+    # data = mjx_env.step(self._mjx_model, data, self._init_ctrl, self.n_substeps)
 
     # initialize env state and info
     metrics = {
@@ -324,7 +360,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         'prev_reward': jp.array(0.0, dtype=float),
         'current_pos': self._start_tip_transform[:3, 3],
         'newly_reset': jp.array(False, dtype=bool),
-        'prev_action': jp.zeros(3),
+        'prev_action': jp.zeros(self.action_size),
         '_steps': jp.array(0, dtype=int),
         'action_history': jp.zeros((
             self._config.action_history_length,
@@ -357,9 +393,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
           collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
         if self._full_proprioception:
-          _prop = jp.concatenate([data.qpos[:7], data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]])
+          ee_height = data.xpos[self._left_finger_geom][2]
+          _prop = jp.concatenate([ jp.array([ee_height]),
+                                  data.qpos[:7],
+                                  # data.qvel[:7], 
+                                  jp.zeros(self.action_size), grasp.astype(float)[..., None]])
         else:
-          _prop = jp.concatenate([data.qvel[:7], jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+          ee_height = data.xpos[self._left_finger_geom][2]
+          _prop = jp.concatenate([jp.array([ee_height]), jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
 
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
 
@@ -391,7 +432,7 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         newly_reset, 0.0, state.info['reached_box']
     )
     state.info['prev_action'] = jp.where(
-        newly_reset, jp.zeros(3), state.info['prev_action']
+        newly_reset, jp.zeros(self.action_size), state.info['prev_action']
     )
 
     # Ocassionally aid exploration.
@@ -533,9 +574,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
         if self._full_proprioception:
-          obs['_prop'] = jp.concatenate([data.qpos[:7], data.qvel[:7], action, grasp.astype(float)[..., None]])
+          ee_height = data.xpos[self._left_finger_geom][2]
+          _prop = jp.concatenate([jp.array([ee_height]),
+                                  data.qpos[:7], 
+                                        #  data.qvel[:7], 
+                                        action, grasp.astype(float)[..., None]])
         else:
-          _prop = jp.concatenate([data.qvel[:7], action, grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+          ee_height = data.xpos[self._left_finger_geom][2]
+          _prop = jp.concatenate([jp.array([ee_height]), jp.zeros(self.action_size), grasp.astype(float)[..., None]])
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
         obs["_prop"] = noisy_prop
 
@@ -555,6 +601,30 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     ):  # Randomized camera positions cannot see location along y line.
       box_pos, target_pos = box_pos[2], target_pos[2]
     return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+  
+  def _move_tip_reset(self, 
+                      target_tip_pose: jax.Array, 
+                      current_tip_rot: jax.Array, 
+                      current_jp: jax.Array
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    new_tip_mat = jp.identity(4)
+    new_tip_mat = new_tip_mat.at[:3, :3].set(current_tip_rot)
+    new_tip_mat = new_tip_mat.at[:3, 3].set(target_tip_pose)
+
+    target_tip_pose = target_tip_pose.at[0].set(jp.clip(target_tip_pose[0], 0.25, 0.77))
+    target_tip_pose = target_tip_pose.at[1].set(jp.clip(target_tip_pose[1], -0.32, 0.32))
+    target_tip_pose = target_tip_pose.at[2].set(jp.clip(target_tip_pose[2], 0.02, 0.5))
+
+    out_jp = panda_kinematics.compute_franka_ik(
+        new_tip_mat, current_jp[6], current_jp[:7]
+    )
+    no_soln = jp.any(jp.isnan(out_jp))
+    out_jp = jp.where(no_soln, current_jp[:7], out_jp)
+    no_soln = jp.logical_or(no_soln, jp.any(jp.isnan(out_jp)))
+    
+    new_jp = current_jp.at[:7].set(out_jp)
+    return new_jp, target_tip_pose, no_soln
+
 
   def _move_tip(
       self,
@@ -641,26 +711,97 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
 
 if __name__ == '__main__':
+  ## DEBUGGIN SECTION ##
   # For testing purposes, you can instantiate the environment like this:
-  xml_path = (
-        mjx_env.ROOT_PATH
-        / 'manipulation'
-        / 'franka_emika_panda'
-        / 'xmls'
-        / 'mjx_single_cube_camera_modified.xml'
-    )
+  # xml_path = (
+  #       mjx_env.ROOT_PATH
+  #       / 'manipulation'
+  #       / 'franka_emika_panda'
+  #       / 'xmls'
+  #       / 'mjx_single_cube_camera_modified.xml'
+  #   )
 
-  # Load the model with assets
-  mj_model = mujoco.MjModel.from_xml_string(
-      xml_path.read_text(), assets=panda.get_assets(actuator="torque")
-  )
+  # # Load the model with assets
+  # mj_model = mujoco.MjModel.from_xml_string(
+  #     xml_path.read_text(), assets=panda.get_assets(actuator="torque")
+  # )
 
-  mj_data = mujoco.MjData(mj_model)
+  # mj_data = mujoco.MjData(mj_model)
 
+  # import mujoco.viewer
+  # # Launch the viewer
+  # with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
+  #     while viewer.is_running():
+  #         # step the simulation
+  #         mujoco.mj_step(mj_model, mj_data)
+  #         viewer.sync()
+  
+
+  import cv2
+  import time
+  import jax
+  key = jax.random.PRNGKey(1)
+  env = PandaPickCubeCartesianModified(config_overrides={'vision': False, 'action': "joint", "actuator":"velocity"})
+
+  # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
+  mj_model_vis = env.mj_model
+  mj_data_vis = mujoco.MjData(mj_model_vis)
+
+  print("Action size:", env.action_size)
+
+  # initial env state
+  jit_reset = jax.jit(env.reset)
+  jit_step = jax.jit(env.step)
+
+  state = jit_reset(key)
+  print(state)
+  # prefer offscreen if available, otherwise use the windowed viewer
+
+  # windowed viewer (simple and reliable)
+  width, height = 640, 480  # Desired image dimensions
+  renderer = mujoco.Renderer(mj_model_vis, height, width)
   import mujoco.viewer
-  # Launch the viewer
-  with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
+  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+      reset_counter = 0
       while viewer.is_running():
-          # step the simulation
-          mujoco.mj_step(mj_model, mj_data)
+          reset_counter += 1
+                    # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
+          mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+          mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+          ctrl_src = np.asarray(state.data.ctrl)
+          mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+
+          if reset_counter % 200 == 0:
+              print("resetting")
+              state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
+              mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+              mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+              ctrl_src = np.asarray(state.data.ctrl)
+              mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+              mujoco.mj_step(mj_model_vis, mj_data_vis)
+              viewer.sync()
+              time.sleep(5)
+              
+          mujoco.mj_step(mj_model_vis, mj_data_vis)
           viewer.sync()
+
+
+          action = jax.random.uniform(
+              jax.random.PRNGKey(int(time.time() * 1e6)),
+              (env.action_size,),
+              minval=-10,
+              maxval=10,
+          )
+          print("Action:", action)
+          state = jit_step(state, action)
+
+
+          # optional: mocap
+          # if hasattr(mj_data_vis, "mocap_pos") and hasattr(state.data, "mocap_pos"):
+          #     src = np.asarray(state.data.mocap_pos)
+          #     mj_data_vis.mocap_pos[: src.shape[0], : src.shape[1]] = src[: mj_data_vis.mocap_pos.shape[0], : mj_data_vis.mocap_pos.shape[1]]
+
+          # update derived quantities for rendering
+
+
+
