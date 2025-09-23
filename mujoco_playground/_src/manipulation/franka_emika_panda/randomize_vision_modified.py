@@ -124,7 +124,7 @@ def domain_randomize(
     # geom_matid = geom_matid.at[strip_geom_id].set(-2)
     # Set floor material to "custom_wood"
 
-    # geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
+    geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
 
     #### Cameras ####
     key_pos, key_ori, key = jax.random.split(key, 3)

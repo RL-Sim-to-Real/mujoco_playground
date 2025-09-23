@@ -30,6 +30,8 @@ from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.manipulation.franka_emika_panda import pick
+import cv2
+
 
 GEAR = np.array([150.0, 150.0, 150.0, 150.0, 20.0, 20.0, 20.0])
 
@@ -72,7 +74,6 @@ def default_config():
       ),
       vision=False,
       proprioception=False,
-      full_proprioception=False,
       vision_config=default_vision_config(),
       obs_noise=config_dict.create(brightness=[1.0, 1.0]),
       box_init_range=0.05,
@@ -141,7 +142,11 @@ def augment_image(rng,
                   img, 
                   contrast_range=(0.8, 1.2),
                   saturation_range=(0.8, 1.2),
-                  hue_range=(-0.05, 0.05)):
+                  hue_range=(-0.05, 0.05),
+                  overlay: jax.Array=None,
+                  random_overlay_rot90=True,   # random 0/90/180/270 rotation of overlay
+                  overlay_flip_lr=True,        # random left-right flip of overlay
+                  overlay_flip_ud=True ):
   # adjust contrast
   rng, rng_c = jax.random.split(rng)
   contrast = jax.random.uniform(rng_c, (), minval=contrast_range[0], maxval=contrast_range[1])
@@ -155,13 +160,45 @@ def augment_image(rng,
   gray = jp.mean(img, axis=-1, keepdims=True)
   img = (img - gray) * saturation + gray
 
-  # # Random hue (shift in HSV space)
+  # Random hue (shift in HSV space)
   # rng, rng_h = jax.random.split(rng)
   # hue = jax.random.uniform(rng_h, (), minval=hue_range[0], maxval=hue_range[1])
   # img_hsv = rgb_to_hsv(img)
   # img_hsv = img_hsv.at[..., 0].add(hue)
   # img_hsv = img_hsv.at[..., 0].set(jp.mod(img_hsv[..., 0], 1.0))  # wrap hue
   # img = hsv_to_rgb(img_hsv)
+
+  # add image overlay with randomized orientation
+  if overlay is not None:
+    ovl = jp.asarray(overlay)  # expected shape (H, W, 3) in [0,1]
+    if random_overlay_rot90 or overlay_flip_lr or overlay_flip_ud:
+      rng, rng_r, rng_flr, rng_fud = jax.random.split(rng, 4)
+
+      if random_overlay_rot90:
+        k = jax.random.randint(rng_r, (), 0, 4)  # 0..3
+        # Note: assumes square H==W for jit-safe static shapes.
+        def _rot0(x): return x
+        def _rot1(x): return jp.flip(jp.swapaxes(x, 0, 1), axis=0)  # 90°
+        def _rot2(x): return jp.flip(jp.flip(x, axis=0), axis=1)    # 180°
+        def _rot3(x): return jp.flip(jp.swapaxes(x, 0, 1), axis=1)  # 270°
+        ovl = jax.lax.switch(k, (_rot0, _rot1, _rot2, _rot3), ovl)
+
+      if overlay_flip_lr:
+        do_flr = jax.random.bernoulli(rng_flr, 0.5)
+        ovl = jax.lax.cond(do_flr, lambda x: jp.flip(x, axis=1), lambda x: x, ovl)
+
+      if overlay_flip_ud:
+        do_fud = jax.random.bernoulli(rng_fud, 0.5)
+        ovl = jax.lax.cond(do_fud, lambda x: jp.flip(x, axis=0), lambda x: x, ovl)
+
+    # pad/crop overlay to img size if needed
+    H, W = img.shape[0], img.shape[1]
+    h, w = min(int(ovl.shape[0]), int(H)), min(int(ovl.shape[1]), int(W))
+    ovl_padded = jp.zeros_like(img)
+    ovl_padded = ovl_padded.at[:h, :w, :].set(ovl[:h, :w, :])
+
+    alpha = jp.asarray(0.2, dtype=img.dtype)  # 25% opacity
+    img = (1.0 - alpha) * img + alpha * ovl_padded
 
   img = jp.clip(img, 0, 1)
   return img
@@ -203,6 +240,27 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
             xml_path.read_text(), assets=panda.get_assets(actuator=config.actuator)
         )
     )
+
+    texture_path = (
+        mjx_env.ROOT_PATH
+        / 'manipulation'
+        / 'franka_emika_panda'
+        / 'xmls'
+        / 'texture-augment.jpeg'
+    )
+      
+
+    self._overlay = None
+
+    try:
+      img_bgr = cv2.imread(str(texture_path))
+      img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+      img_rgb = cv2.resize(img_rgb, \
+                           (config.vision_config.render_width, config.vision_config.render_height))
+      self._overlay = jp.asarray(img_rgb.astype(np.float32)) / 255.0 
+    except Exception as e:
+      print(f"Error loading overlay image: {e}")
+
     mj_model.opt.timestep = config.sim_dt
 
     self._mj_model = mj_model
@@ -265,14 +323,26 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     # mj_model.geom_matid[geoms] = mj_model.mat('black').id
     return mj_model
 
+  def _jnt_range(self):
+    # TODO(siholt): Use joint limits from XML.
+    return [
+        [-2.8973, 2.8973],
+        [-1.7628, 1.7628],
+        [-2.8973, 2.8973],
+        [-3.0718, -0.0698],
+        [-2.8973, 2.8973],
+        [-0.0175, 3.7525],
+        [-2.8973, 2.8973],
+    ]
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
     x_plane = self._start_tip_transform[0, 3] - 0.03  # Account for finite gain
-    # randomize end effector and white strip position
+    # randomize end effector position
     rng, rng_plane = jax.random.split(rng)
-    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.2, maxval=0.0)
+    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)
 
- 
+    
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
@@ -289,7 +359,6 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       init_ctrl0 = reset_joint_pos
     else:
       init_ctrl0 = jp.asarray(self._init_ctrl)
-
     
     
     # intialize box position
@@ -372,6 +441,9 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
     obs = self._get_obs(data, info)
     obs = jp.concat([obs, jp.zeros(1), jp.zeros(3)], axis=0)
+
+    
+
     if self._vision:
       rng_brightness, rng_img, rng = jax.random.split(rng, num=3)
       brightness = jax.random.uniform(
@@ -387,24 +459,28 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
       obs = adjust_brightness(obs, brightness)
-      obs = augment_image(rng_img, img=obs)
+      obs = augment_image(rng_img, img=obs, overlay=self._overlay)
       obs = {'pixels/view_0': obs}
       grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
           collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
       if self._proprioception:
-        if self._full_proprioception:
-          ee_height = data.xpos[self._left_finger_geom][2]
-          _prop = jp.concatenate([ jp.array([ee_height]),
-                                  data.qpos[:7],
-                                  # data.qvel[:7], 
-                                  jp.zeros(self.action_size), grasp.astype(float)[..., None]])
-        else:
-          ee_height = data.xpos[self._left_finger_geom][2]
-          _prop = jp.concatenate([jp.array([ee_height]), jp.zeros(self.action_size), grasp.astype(float)[..., None]]) ## Add noise for simtoreal
+
+        ee_height = data.xpos[self._left_finger_geom][2]
+        joint_p = data.qpos[:7]
+        normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
+          jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
+        ) - 1
+        _prop = jp.concatenate([ 
+                                jp.array([ee_height]),
+                                normalized_jp,
+                                # data.qvel[:7], 
+                                jp.zeros(self.action_size), grasp.astype(float)[..., None]])
+
 
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
 
-    return mjx_env.State(data, obs, reward, done, metrics, info)  
+    return mjx_env.State(data, obs, reward, done, metrics, info)
+  
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     """Runs one timestep of the environment's dynamics."""
@@ -569,19 +645,22 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
       obs = adjust_brightness(obs, state.info['brightness'])
       # augment image
       rng_img = state.info['rng_img']  # Use the same RNG as in reset for consistency
-      obs = augment_image(rng_img, img=obs)
+      obs = augment_image(rng_img, img=obs, overlay=self._overlay)
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
-        if self._full_proprioception:
-          ee_height = data.xpos[self._left_finger_geom][2]
-          _prop = jp.concatenate([jp.array([ee_height]),
-                                  data.qpos[:7], 
-                                        #  data.qvel[:7], 
-                                        action, grasp.astype(float)[..., None]])
-        else:
-          ee_height = data.xpos[self._left_finger_geom][2]
-          _prop = jp.concatenate([jp.array([ee_height]), jp.zeros(self.action_size), grasp.astype(float)[..., None]])
+
+        ee_height = data.xpos[self._left_finger_geom][2]
+        joint_p = data.qpos[:7]
+        normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
+          jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
+        ) - 1
+        _prop = jp.concatenate([
+                                jp.array([ee_height]),
+                                normalized_jp, 
+                                      #  data.qvel[:7], 
+                                      action, grasp.astype(float)[..., None]])
+
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
         obs["_prop"] = noisy_prop
 
