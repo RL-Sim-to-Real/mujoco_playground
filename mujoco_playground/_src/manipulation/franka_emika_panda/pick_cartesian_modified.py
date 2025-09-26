@@ -224,7 +224,6 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
     mjx_env.MjxEnv.__init__(self, config, config_overrides)
     self._vision = config.vision
     self._proprioception = config.proprioception
-    self._full_proprioception = config.full_proprioception
 
     xml_path = (
         mjx_env.ROOT_PATH
@@ -334,6 +333,18 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         [-0.0175, 3.7525],
         [-2.8973, 2.8973],
     ]
+    
+  def _jnt_vel_range(self):
+    return [
+        [-2.1750, 2.1750],
+        [-2.1750, 2.1750],
+        [-2.1750, 2.1750],
+        [-2.1750, 2.1750],
+        [-2.6100, 2.6100],
+        [-2.6100, 2.6100],
+        [-2.6100, 2.6100],
+    ]
+
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
@@ -470,11 +481,14 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
         normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
         ) - 1
+        joint_v = data.qvel[:7]
+        normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
+          jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
+        ) - 1
         _prop = jp.concatenate([ 
-                                jp.array([ee_height]),
                                 normalized_jp,
-                                # data.qvel[:7], 
-                                jp.zeros(self.action_size), grasp.astype(float)[..., None]])
+                                normalized_jv, 
+                                jp.zeros(self.action_size), jp.array([ee_height]), grasp.astype(float)[..., None]])
 
 
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
@@ -652,14 +666,18 @@ class PandaPickCubeCartesianModified(pick.PandaPickCube):
 
         ee_height = data.xpos[self._left_finger_geom][2]
         joint_p = data.qpos[:7]
+        joint_v = data.qvel[:7]
+        normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
+          jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
+        ) - 1
         normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
         ) - 1
         _prop = jp.concatenate([
-                                jp.array([ee_height]),
+
                                 normalized_jp, 
-                                      #  data.qvel[:7], 
-                                      action, grasp.astype(float)[..., None]])
+                                normalized_jv,  # Include normalized joint velocity
+                                action, jp.array([ee_height]), grasp.astype(float)[..., None]])
 
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
         obs["_prop"] = noisy_prop
@@ -819,8 +837,9 @@ if __name__ == '__main__':
   import cv2
   import time
   import jax
+  import mujoco.viewer
   key = jax.random.PRNGKey(1)
-  env = PandaPickCubeCartesianModified(config_overrides={'vision': False, 'action': "joint", "actuator":"velocity"})
+  env = PandaPickCubeCartesianModified(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model
@@ -833,13 +852,37 @@ if __name__ == '__main__':
   jit_step = jax.jit(env.step)
 
   state = jit_reset(key)
-  print(state)
+  # print(state)
   # prefer offscreen if available, otherwise use the windowed viewer
-
+  # mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  # mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
   # windowed viewer (simple and reliable)
-  width, height = 640, 480  # Desired image dimensions
-  renderer = mujoco.Renderer(mj_model_vis, height, width)
-  import mujoco.viewer
+  # width, height = 640, 480  # Desired image dimensions
+  # renderer = mujoco.Renderer(mj_model_vis, height, width)
+
+  # # Render image from a specific camera
+  # camera_name = "mounted"  # Replace with the actual camera name
+  # camera_id = mujoco.mj_name2id(mj_model_vis, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+  # print(f"Using camera '{camera_name}' with ID {camera_id}")
+  # if camera_id == -1:
+  #     print(f"Camera '{camera_name}' not found in the model.")
+  # else:
+  #   while True:
+  #       mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #       renderer.update_scene(mj_data_vis, camera=camera_id)
+  #       image = renderer.render() # Render the image as a NumPy array
+
+  #       # Convert the image to BGR format for OpenCV
+  #       image_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+  #       # Display the image using OpenCV
+  #       cv2.imshow("MuJoCo Camera Feed", image_bgr)
+
+  #       # Exit on 'q' press
+  #       if cv2.waitKey(1) & 0xFF == ord('q'):
+  #           break
+
+    # cv2.destroyAllWindows()
   with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
       reset_counter = 0
       while viewer.is_running():
@@ -873,14 +916,6 @@ if __name__ == '__main__':
           )
           print("Action:", action)
           state = jit_step(state, action)
-
-
-          # optional: mocap
-          # if hasattr(mj_data_vis, "mocap_pos") and hasattr(state.data, "mocap_pos"):
-          #     src = np.asarray(state.data.mocap_pos)
-          #     mj_data_vis.mocap_pos[: src.shape[0], : src.shape[1]] = src[: mj_data_vis.mocap_pos.shape[0], : mj_data_vis.mocap_pos.shape[1]]
-
-          # update derived quantities for rendering
 
 
 

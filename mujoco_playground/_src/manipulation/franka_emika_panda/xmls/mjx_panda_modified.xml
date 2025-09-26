@@ -220,7 +220,7 @@
                          class="collision" conaffinity="1" size="0.04 0.06"
                          quat="1 1 0 0" pos="0 0 0.03"/>
                       <!-- wrist mounted camera matching Intel D405 -->
-                      <camera fovy="58" name="mounted" pos="-0.07 0.0 0.02" xyaxes="0 -1 0 -0.966 0 0.3"/>
+                      <camera fovy="58" name="mounted" pos="0.07 0.0 0.02" xyaxes="0 1 0 0.966 0 0.3"/>
                         <site name="gripper" pos="0 0 0.1"/>
                         <body name="left_finger" pos="0 0 0.0584" gravcomp="1">
                           <inertial mass="0.015" pos="0 0 0" diaginertia="2.375e-6 2.375e-6 7.5e-7"/>
