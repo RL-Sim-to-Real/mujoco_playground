@@ -197,7 +197,7 @@ def augment_image(rng,
     ovl_padded = jp.zeros_like(img)
     ovl_padded = ovl_padded.at[:h, :w, :].set(ovl[:h, :w, :])
 
-    alpha = jp.asarray(0.3, dtype=img.dtype)  # 25% opacity
+    alpha = jp.asarray(0.2, dtype=img.dtype)  # 25% opacity
     img = (1.0 - alpha) * img + alpha * ovl_padded
 
   img = jp.clip(img, 0, 1)
@@ -211,7 +211,7 @@ def adjust_brightness(img, scale):
   return jp.clip(img * scale, 0, 1)
 
 
-class PandaPickCubeCartesian3D(pick.PandaPickCube):
+class PandaPushCube(pick.PandaPickCube):
   """Environment for training the Franka Panda robot to pick up a cube in
   Cartesian space."""
 
@@ -278,7 +278,7 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
       except ImportError:
         warnings.warn(
             'Madrona MJX not installed. Cannot use vision with'
-            ' PandaPickCubeCartesian#D.'
+            ' PandaPushCube.'
         )
         return
       self.renderer = BatchRenderer(
@@ -839,7 +839,7 @@ if __name__ == '__main__':
   import jax
   import mujoco.viewer
   key = jax.random.PRNGKey(1)
-  env = PandaPickCubeCartesian3D(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
+  env = PandaPushCube(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model
