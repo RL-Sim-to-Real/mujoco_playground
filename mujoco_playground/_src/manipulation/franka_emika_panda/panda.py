@@ -43,8 +43,10 @@ def get_assets(actuator: str="position") -> Dict[str, bytes]:
   path = mjx_env.ROOT_PATH / "manipulation" / "franka_emika_panda" / "xmls"
   mjx_env.update_assets(assets, path, "*.xml")
   mjx_env.update_assets(assets, path, f"actuators/{actuator}/actuator.xml") # include actuators file
+  mjx_env.update_assets(assets, path, f"actuators/{actuator}/keyframe.xml") # separate keyframes for different actuators
   # add custom texture asset
-  mjx_env.update_assets(assets, path, "texture.png")
+  mjx_env.update_assets(assets, path, "texture*.png")
+  mjx_env.update_assets(assets, path, "texture*.jpeg")
   path = mjx_env.MENAGERIE_PATH / _MENAGERIE_FRANKA_DIR
   mjx_env.update_assets(assets, path, "*.xml")
   mjx_env.update_assets(assets, path / "assets")
@@ -103,6 +105,7 @@ class PandaBase(mjx_env.MjxEnv):
     self._mocap_target = self._mj_model.body("mocap_target").mocapid
     self._floor_geom = self._mj_model.geom("floor").id
     self._init_q = self._mj_model.keyframe(keyframe).qpos
+    print("self._init_q:", self._init_q)
     self._init_obj_pos = jp.array(
         self._init_q[self._obj_qposadr : self._obj_qposadr + 3],
         dtype=jp.float32,
