@@ -31,7 +31,7 @@ from mujoco_playground._src.manipulation.franka_emika_panda import panda
 from mujoco_playground._src.manipulation.franka_emika_panda import panda_kinematics
 from mujoco_playground._src.manipulation.franka_emika_panda import pick
 import cv2
-
+from mujoco.mjx._src import math
 
 GEAR = np.array([150.0, 150.0, 150.0, 150.0, 20.0, 20.0, 20.0])
 
@@ -211,7 +211,7 @@ def adjust_brightness(img, scale):
   return jp.clip(img * scale, 0, 1)
 
 
-class PandaPushCube(pick.PandaPickCube):
+class PandaPushCube(panda.PandaBase):
   """Environment for training the Franka Panda robot to pick up a cube in
   Cartesian space."""
 
@@ -236,7 +236,7 @@ class PandaPushCube(pick.PandaPickCube):
 
     mj_model = self.modify_model(
         mujoco.MjModel.from_xml_string(
-            xml_path.read_text(), assets=panda.get_assets(actuator=config.actuator)
+            xml_path.read_text(), assets=panda.get_assets(actuator=config.actuator, task="push")
         )
     )
 
@@ -495,6 +495,66 @@ class PandaPushCube(pick.PandaPickCube):
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
+  def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
+    target_pos = info["target_pos"]
+    box_pos = data.xpos[self._obj_body]
+    gripper_pos = data.site_xpos[self._gripper_site]
+    pos_err = jp.linalg.norm(target_pos - box_pos)
+    box_mat = data.xmat[self._obj_body]
+    target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
+    rot_err = jp.linalg.norm(target_mat.ravel()[:6] - box_mat.ravel()[:6])
+
+    box_target = 1 - jp.tanh(5 * (0.9 * pos_err + 0.1 * rot_err))
+    gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
+    robot_target_qpos = 1 - jp.tanh(
+        jp.linalg.norm(
+            data.qpos[self._robot_arm_qposadr]
+            - self._init_q[self._robot_arm_qposadr]
+        )
+    )
+
+    # Check for collisions with the floor
+    hand_floor_collision = [
+        collision.geoms_colliding(data, self._floor_geom, g)
+        for g in [
+            self._left_finger_geom,
+            self._right_finger_geom,
+            self._hand_geom,
+        ]
+    ]
+    floor_collision = sum(hand_floor_collision) > 0
+    no_floor_collision = (1 - floor_collision).astype(float)
+
+    info["reached_box"] = 1.0 * jp.maximum(
+        info["reached_box"],
+        (jp.linalg.norm(box_pos - gripper_pos) < 0.012),
+    )
+
+    rewards = {
+        "gripper_box": gripper_box,
+        "box_target": box_target * info["reached_box"],
+        "no_floor_collision": no_floor_collision,
+        "robot_target_qpos": robot_target_qpos,
+    }
+    return rewards
+
+  
+  def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
+    gripper_pos = data.site_xpos[self._gripper_site]
+    gripper_mat = data.site_xmat[self._gripper_site].ravel()
+    target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
+    obs = jp.concatenate([
+        data.qpos,
+        data.qvel,
+        gripper_pos,
+        gripper_mat[3:],
+        data.xmat[self._obj_body].ravel()[3:],
+        data.xpos[self._obj_body] - data.site_xpos[self._gripper_site],
+        info["target_pos"] - data.xpos[self._obj_body],
+        target_mat.ravel()[:6] - data.xmat[self._obj_body].ravel()[:6],
+        data.ctrl - data.qpos[self._robot_qposadr[:-1]],
+    ])
+    return obs
 
   def step(self, state: mjx_env.State, action: jax.Array) -> mjx_env.State:
     """Runs one timestep of the environment's dynamics."""
@@ -507,7 +567,7 @@ class PandaPushCube(pick.PandaPickCube):
     action_idx = jax.random.randint(
         key, (), minval=0, maxval=self._config.action_history_length
     )
-    action = action.at[-1].set(state.info['action_history'][action_idx])
+    # action = action.at[-1].set(state.info['action_history'][action_idx]) # for the gripper not needed here
 
     state.info['newly_reset'] = state.info['_steps'] == 0
 
@@ -674,7 +734,6 @@ class PandaPushCube(pick.PandaPickCube):
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
         ) - 1
         _prop = jp.concatenate([
-
                                 normalized_jp, 
                                 normalized_jv,  # Include normalized joint velocity
                                 action, jp.array([ee_height]), grasp.astype(float)[..., None]])
@@ -757,16 +816,16 @@ class PandaPushCube(pick.PandaPickCube):
         jp.any(jp.isnan(out_jp)), current_tip_pos, new_tip_pos
     )
 
-    new_ctrl = new_ctrl.at[:7].set(out_jp)
-    jaw_action = jp.where(close_gripper, -1.0, 1.0)
-    claw_delta = jaw_action * 0.02  # up to 2 cm movement per ctrl.
-    new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
+    # new_ctrl = new_ctrl.at[:7].set(out_jp)
+    # jaw_action = jp.where(close_gripper, -1.0, 1.0)
+    # claw_delta = jaw_action * 0.02  # up to 2 cm movement per ctrl.
+    # new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
 
     return new_ctrl, new_tip_pos, no_soln
 
   def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
     new_ctrl = current_ctrl
-    scaled_action = action[:-1] * self._config.action_scale
+    scaled_action = action * self._config.action_scale
     if self._config.action == 'joint_increment':
       # Incremental joint control.
       new_ctrl = new_ctrl.at[:7].add(scaled_action)
@@ -776,10 +835,10 @@ class PandaPushCube(pick.PandaPickCube):
       if self._config.actuator == 'torque':
         new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
                                                 -self._max_torque / self._gear, self._max_torque / self._gear))
-    close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
-    jaw_action = jp.where(close_gripper, -1.0, 1.0)
-    claw_delta = jaw_action * 0.02  # up to 2 cm movement
-    new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
+    # close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
+    # jaw_action = jp.where(close_gripper, -1.0, 1.0)
+    # claw_delta = jaw_action * 0.02  # up to 2 cm movement
+    # new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
     no_soln = jp.any(jp.isnan(new_ctrl))
 
     return new_ctrl, no_soln
@@ -788,9 +847,9 @@ class PandaPushCube(pick.PandaPickCube):
   @property
   def action_size(self) -> int:
     if self._config.action == 'cartesian_increment':
-      return 4
+      return 3
     elif self._config.action in {'joint_increment', 'joint'}:
-      return 8 # for all 8 joints
+      return 7 # for all 8 joints
     
     return -1
 
@@ -810,48 +869,48 @@ class PandaPushCube(pick.PandaPickCube):
 if __name__ == '__main__':
   ## DEBUGGIN SECTION ##
   # For testing purposes, you can instantiate the environment like this:
-  # xml_path = (
-  #       mjx_env.ROOT_PATH
-  #       / 'manipulation'
-  #       / 'franka_emika_panda'
-  #       / 'xmls'
-  #       / 'mjx_single_cube_camera_modified.xml'
-  #   )
+  xml_path = (
+        mjx_env.ROOT_PATH
+        / 'manipulation'
+        / 'franka_emika_panda'
+        / 'xmls'
+        / 'mjx_single_cube_camera_modified.xml'
+    )
 
-  # # Load the model with assets
-  # mj_model = mujoco.MjModel.from_xml_string(
-  #     xml_path.read_text(), assets=panda.get_assets(actuator="torque")
-  # )
+  # Load the model with assets
+  mj_model = mujoco.MjModel.from_xml_string(
+      xml_path.read_text(), assets=panda.get_assets(actuator="position", task="push")
+  )
 
-  # mj_data = mujoco.MjData(mj_model)
+  mj_data = mujoco.MjData(mj_model)
 
-  # import mujoco.viewer
-  # # Launch the viewer
-  # with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
-  #     while viewer.is_running():
-  #         # step the simulation
-  #         mujoco.mj_step(mj_model, mj_data)
-  #         viewer.sync()
+  import mujoco.viewer
+  # Launch the viewer
+  with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
+      while viewer.is_running():
+          # step the simulation
+          mujoco.mj_step(mj_model, mj_data)
+          viewer.sync()
   
 
-  import cv2
-  import time
-  import jax
-  import mujoco.viewer
-  key = jax.random.PRNGKey(1)
-  env = PandaPushCube(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
+  # import cv2
+  # import time
+  # import jax
+  # import mujoco.viewer
+  # key = jax.random.PRNGKey(1)
+  # env = PandaPushCube(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
 
-  # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
-  mj_model_vis = env.mj_model
-  mj_data_vis = mujoco.MjData(mj_model_vis)
+  # # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
+  # mj_model_vis = env.mj_model
+  # mj_data_vis = mujoco.MjData(mj_model_vis)
 
-  print("Action size:", env.action_size)
+  # print("Action size:", env.action_size)
 
-  # initial env state
-  jit_reset = jax.jit(env.reset)
-  jit_step = jax.jit(env.step)
+  # # initial env state
+  # jit_reset = jax.jit(env.reset)
+  # jit_step = jax.jit(env.step)
 
-  state = jit_reset(key)
+  # state = jit_reset(key)
   # print(state)
   # prefer offscreen if available, otherwise use the windowed viewer
   # mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
@@ -883,39 +942,39 @@ if __name__ == '__main__':
   #           break
 
     # cv2.destroyAllWindows()
-  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
-      reset_counter = 0
-      while viewer.is_running():
-          reset_counter += 1
-                    # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
-          mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-          mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-          ctrl_src = np.asarray(state.data.ctrl)
-          mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+  # with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+  #     reset_counter = 0
+  #     while viewer.is_running():
+  #         reset_counter += 1
+  #                   # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
+  #         mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  #         mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  #         ctrl_src = np.asarray(state.data.ctrl)
+  #         mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
 
-          if reset_counter % 200 == 0:
-              print("resetting")
-              state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
-              mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-              mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-              ctrl_src = np.asarray(state.data.ctrl)
-              mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
-              mujoco.mj_step(mj_model_vis, mj_data_vis)
-              viewer.sync()
-              time.sleep(5)
+  #         if reset_counter % 200 == 0:
+  #             print("resetting")
+  #             state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
+  #             mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  #             mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  #             ctrl_src = np.asarray(state.data.ctrl)
+  #             mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+  #             mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #             viewer.sync()
+  #             time.sleep(5)
               
-          mujoco.mj_step(mj_model_vis, mj_data_vis)
-          viewer.sync()
+  #         mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #         viewer.sync()
 
 
-          action = jax.random.uniform(
-              jax.random.PRNGKey(int(time.time() * 1e6)),
-              (env.action_size,),
-              minval=-10,
-              maxval=10,
-          )
-          print("Action:", action)
-          state = jit_step(state, action)
+  #         action = jax.random.uniform(
+  #             jax.random.PRNGKey(int(time.time() * 1e6)),
+  #             (env.action_size,),
+  #             minval=-10,
+  #             maxval=10,
+  #         )
+  #         print("Action:", action)
+  #         state = jit_step(state, action)
 
 
 

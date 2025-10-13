@@ -38,12 +38,12 @@ _FINGER_JOINTS = ["finger_joint1", "finger_joint2"]
 _MENAGERIE_FRANKA_DIR = "franka_emika_panda"
 
 
-def get_assets(actuator: str="position") -> Dict[str, bytes]:
+def get_assets(actuator: str="position", task: str="pick") -> Dict[str, bytes]:
   assets = {}
   path = mjx_env.ROOT_PATH / "manipulation" / "franka_emika_panda" / "xmls"
   mjx_env.update_assets(assets, path, "*.xml")
   mjx_env.update_assets(assets, path, f"actuators/{actuator}/actuator.xml") # include actuators file
-  mjx_env.update_assets(assets, path, f"actuators/{actuator}/keyframe.xml") # separate keyframes for different actuators
+  mjx_env.update_assets(assets, path, f"actuators/{actuator}/{task}/keyframe.xml") # separate keyframes for different actuators
   # add custom texture asset
   mjx_env.update_assets(assets, path, "texture*.png")
   mjx_env.update_assets(assets, path, "texture*.jpeg")
