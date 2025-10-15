@@ -839,7 +839,7 @@ if __name__ == '__main__':
   import jax
   import mujoco.viewer
   key = jax.random.PRNGKey(1)
-  env = PandaPickCubeCartesian3D(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
+  env = PandaPickCubeCartesian3D(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model
@@ -916,6 +916,6 @@ if __name__ == '__main__':
           )
           print("Action:", action)
           state = jit_step(state, action)
-
+          print(state.reward)
 
 

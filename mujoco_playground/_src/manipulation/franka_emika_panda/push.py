@@ -62,14 +62,12 @@ def default_config():
               box_target=8.0,
               # Do not collide the gripper with the floor.
               no_floor_collision=0.25,
-              # Do not collide cube with gripper
-              no_box_collision=0.05,
               # Destabilizes training in cartesian action space.
               robot_target_qpos=0.0,
           ),
           action_rate=-0.0005,
           no_soln_reward=-0.01,
-          lifted_reward=0.5,
+          contact_reward=0.5,
           success_reward=2.0,
       ),
       vision=False,
@@ -376,13 +374,14 @@ class PandaPushCube(panda.PandaBase):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + jax.random.uniform(rng_box, (), minval=-self._config.box_init_range_y, maxval=self._config.box_init_range_y), # randomize about white strip
+        x_plane + jax.random.uniform(rng_box, (), minval=0, maxval=self._config.box_init_range_y), # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
 
+  
     # Fixed target position to simplify pixels-only training.
-    target_pos = jp.array([x_plane, 0.0, 0.20])
+    target_pos = jp.array([box_pos[0] + 0.1, 0.0, 0.03]) # push object 10 cm forward
 
     # initialize pipeline state
     init_q = (
@@ -430,7 +429,6 @@ class PandaPushCube(panda.PandaBase):
             for k in self._config.reward_config.reward_scales.keys()
         },
         'reward/success': jp.array(0.0),
-        'reward/lifted': jp.array(0.0),
     }
 
     info = {
@@ -472,8 +470,7 @@ class PandaPushCube(panda.PandaBase):
       obs = adjust_brightness(obs, brightness)
       obs = augment_image(rng_img, img=obs, overlay=self._overlay)
       obs = {'pixels/view_0': obs}
-      grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
-          collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
+
       if self._proprioception:
 
         ee_height = data.xpos[self._left_finger_geom][2]
@@ -488,7 +485,7 @@ class PandaPushCube(panda.PandaBase):
         _prop = jp.concatenate([ 
                                 normalized_jp,
                                 normalized_jv, 
-                                jp.zeros(self.action_size), jp.array([ee_height]), grasp.astype(float)[..., None]])
+                                jp.zeros(self.action_size), jp.array([ee_height])])
 
 
         obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
@@ -498,6 +495,7 @@ class PandaPushCube(panda.PandaBase):
   def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
     target_pos = info["target_pos"]
     box_pos = data.xpos[self._obj_body]
+    box_pos = box_pos.at[0].add(-0.02) # reach for the back of the box
     gripper_pos = data.site_xpos[self._gripper_site]
     pos_err = jp.linalg.norm(target_pos - box_pos)
     box_mat = data.xmat[self._obj_body]
@@ -586,21 +584,21 @@ class PandaPushCube(panda.PandaBase):
     )
 
     # Ocassionally aid exploration.
-    state.info['rng'], key_swap = jax.random.split(state.info['rng'])
-    to_sample = newly_reset * jax.random.bernoulli(key_swap, 0.05)
-    swapped_data = state.data.replace(
-        qpos=self._guide_q, ctrl=self._guide_ctrl
-    )  # help hit the terminal sparse reward.
-    data = jax.tree_util.tree_map(
-        lambda x, y: (1 - to_sample) * x + to_sample * y,
-        state.data,
-        swapped_data,
-    )
-
+    # state.info['rng'], key_swap = jax.random.split(state.info['rng'])
+    # to_sample = newly_reset * jax.random.bernoulli(key_swap, 0.05)
+    # swapped_data = state.data.replace(
+    #     qpos=self._guide_q, ctrl=self._guide_ctrl
+    # )  # help hit the terminal sparse reward.
+    # data = jax.tree_util.tree_map(
+    #     lambda x, y: (1 - to_sample) * x + to_sample * y,
+    #     state.data,
+    #     swapped_data,
+    # )
+    data = state.data
     # Cartesian control
 
     if self._config.action == 'cartesian_increment':
-      increment = jp.zeros(4)
+      increment = jp.zeros(3)
       increment = action  # directly set x, y, z and gripper commands.
       ctrl, new_tip_position, no_soln = self._move_tip(
           state.info['current_pos'],
@@ -628,8 +626,6 @@ class PandaPushCube(panda.PandaBase):
     }
 
     # Penalize collision with box.
-    hand_box = collision.geoms_colliding(data, self._box_geom, self._hand_geom)
-    raw_rewards['no_box_collision'] = jp.where(hand_box, 0.0, 1.0)
 
     total_reward = jp.clip(sum(rewards.values()), -1e4, 1e4)
 
@@ -642,15 +638,21 @@ class PandaPushCube(panda.PandaBase):
 
     # Sparse rewards
     box_pos = data.xpos[self._obj_body]
-    lifted = (box_pos[2] > 0.05) * self._config.reward_config.lifted_reward
-    total_reward += lifted
+    hand_contact = collision.geoms_colliding(data, self._box_geom, self._hand_geom)
+        
+    total_reward += 2 * hand_contact # train agent to push with hand instead and not fingers
+    finger_box_collision = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) |\
+    collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
+    no_finger_box_collision = (1-finger_box_collision).astype(float)
+    total_reward += no_finger_box_collision
     success = self._get_success(data, state.info)
     total_reward += success * self._config.reward_config.success_reward
-
+    # jax.debug.print("Total reward: {}", total_reward)
     # Reward progress
     reward = jp.maximum(
         total_reward - state.info['prev_reward'], jp.zeros_like(total_reward)
     )
+    # reward = total_reward
     state.info['prev_reward'] = jp.maximum(
         total_reward, state.info['prev_reward']
     )
@@ -659,9 +661,7 @@ class PandaPushCube(panda.PandaBase):
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
-    finger_collision: bool = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) ^\
-        collision.geoms_colliding(data, self._box_geom, self._right_finger_geom) # if it's not grasping it's a collisiong
-    state.metrics.update(cube_collision=(hand_box|finger_collision).astype(float)) # log collision only if lift wasn't successfull
+
     hand_floor_collision = [
         collision.geoms_colliding(data, self._floor_geom, g)
         for g in [
@@ -685,10 +685,9 @@ class PandaPushCube(panda.PandaBase):
     
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
-    state.metrics.update(success=jp.where(to_sample, 0.0, success).astype(float))
+    state.metrics.update(success=success.astype(float))
     state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
     state.metrics.update({
-        'reward/lifted': lifted.astype(float),
         'reward/success': (success * self._config.reward_config.success_reward).astype(float),
     })
 
@@ -698,7 +697,9 @@ class PandaPushCube(panda.PandaBase):
         | jp.isnan(data.qvel).any()
         | success
     )
-
+    # jax.debug.print("Done: {}", done)
+    # jax.debug.print("out of bounds: {}", out_of_bounds)
+    # jax.debug.print("success: {}", success)
 
     # Ensure exact sync between newly_reset and the autoresetwrapper.
     state.info['_steps'] += self._config.action_repeat
@@ -711,8 +712,6 @@ class PandaPushCube(panda.PandaBase):
     obs = self._get_obs(data, state.info)
     obs = jp.concat([obs, no_soln.reshape(1), action], axis=0)
   
-    grasp = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) &\
-        collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
     if self._vision:
       _, rgb, _ = self.renderer.render(state.info['render_token'], data)
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
@@ -736,7 +735,7 @@ class PandaPushCube(panda.PandaBase):
         _prop = jp.concatenate([
                                 normalized_jp, 
                                 normalized_jv,  # Include normalized joint velocity
-                                action, jp.array([ee_height]), grasp.astype(float)[..., None]])
+                                action, jp.array([ee_height])])
 
         noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
         obs["_prop"] = noisy_prop
@@ -755,7 +754,7 @@ class PandaPushCube(panda.PandaBase):
     if (
         self._vision
     ):  # Randomized camera positions cannot see location along y line.
-      box_pos, target_pos = box_pos[2], target_pos[2]
+      box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
     return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
   
   def _move_tip_reset(self, 
@@ -790,8 +789,7 @@ class PandaPushCube(panda.PandaBase):
       action: jax.Array,
   ) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Calculate new tip position from cartesian increment."""
-    # Discrete gripper action where a < 0 := closed
-    close_gripper = jp.where(action[3] < 0, 1.0, 0.0)
+
 
     scaled_pos = action[:3] * self._config.action_scale
     new_tip_pos = current_tip_pos.at[:3].add(scaled_pos)
@@ -815,11 +813,7 @@ class PandaPushCube(panda.PandaBase):
     new_tip_pos = jp.where(
         jp.any(jp.isnan(out_jp)), current_tip_pos, new_tip_pos
     )
-
-    # new_ctrl = new_ctrl.at[:7].set(out_jp)
-    # jaw_action = jp.where(close_gripper, -1.0, 1.0)
-    # claw_delta = jaw_action * 0.02  # up to 2 cm movement per ctrl.
-    # new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
+    new_ctrl = new_ctrl.at[:7].set(out_jp)
 
     return new_ctrl, new_tip_pos, no_soln
 
@@ -869,48 +863,48 @@ class PandaPushCube(panda.PandaBase):
 if __name__ == '__main__':
   ## DEBUGGIN SECTION ##
   # For testing purposes, you can instantiate the environment like this:
-  xml_path = (
-        mjx_env.ROOT_PATH
-        / 'manipulation'
-        / 'franka_emika_panda'
-        / 'xmls'
-        / 'mjx_single_cube_camera_modified.xml'
-    )
+  # xml_path = (
+  #       mjx_env.ROOT_PATH
+  #       / 'manipulation'
+  #       / 'franka_emika_panda'
+  #       / 'xmls'
+  #       / 'mjx_single_cube_camera_modified.xml'
+  #   )
 
-  # Load the model with assets
-  mj_model = mujoco.MjModel.from_xml_string(
-      xml_path.read_text(), assets=panda.get_assets(actuator="position", task="push")
-  )
+  # # Load the model with assets
+  # mj_model = mujoco.MjModel.from_xml_string(
+  #     xml_path.read_text(), assets=panda.get_assets(actuator="position", task="push")
+  # )
 
-  mj_data = mujoco.MjData(mj_model)
+  # mj_data = mujoco.MjData(mj_model)
 
-  import mujoco.viewer
-  # Launch the viewer
-  with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
-      while viewer.is_running():
-          # step the simulation
-          mujoco.mj_step(mj_model, mj_data)
-          viewer.sync()
+  # import mujoco.viewer
+  # # Launch the viewer
+  # with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
+  #     while viewer.is_running():
+  #         # step the simulation
+  #         mujoco.mj_step(mj_model, mj_data)
+  #         viewer.sync()
   
 
-  # import cv2
-  # import time
-  # import jax
-  # import mujoco.viewer
-  # key = jax.random.PRNGKey(1)
-  # env = PandaPushCube(config_overrides={'vision': False, 'action': "joint", "actuator":"torque"})
+  import cv2
+  import time
+  import jax
+  import mujoco.viewer
+  key = jax.random.PRNGKey(1)
+  env = PandaPushCube(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
 
-  # # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
-  # mj_model_vis = env.mj_model
-  # mj_data_vis = mujoco.MjData(mj_model_vis)
+  # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
+  mj_model_vis = env.mj_model
+  mj_data_vis = mujoco.MjData(mj_model_vis)
 
-  # print("Action size:", env.action_size)
+  print("Action size:", env.action_size)
 
-  # # initial env state
-  # jit_reset = jax.jit(env.reset)
-  # jit_step = jax.jit(env.step)
+  # initial env state
+  jit_reset = jax.jit(env.reset)
+  jit_step = jax.jit(env.step)
 
-  # state = jit_reset(key)
+  state = jit_reset(key)
   # print(state)
   # prefer offscreen if available, otherwise use the windowed viewer
   # mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
@@ -942,39 +936,42 @@ if __name__ == '__main__':
   #           break
 
     # cv2.destroyAllWindows()
-  # with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
-  #     reset_counter = 0
-  #     while viewer.is_running():
-  #         reset_counter += 1
-  #                   # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
-  #         mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-  #         mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-  #         ctrl_src = np.asarray(state.data.ctrl)
-  #         mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+      reset_counter = 0
+      while viewer.is_running():
+          reset_counter += 1
+                    # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
+          mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+          mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+          ctrl_src = np.asarray(state.data.ctrl)
+          mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
 
-  #         if reset_counter % 200 == 0:
-  #             print("resetting")
-  #             state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
-  #             mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-  #             mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-  #             ctrl_src = np.asarray(state.data.ctrl)
-  #             mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
-  #             mujoco.mj_step(mj_model_vis, mj_data_vis)
-  #             viewer.sync()
-  #             time.sleep(5)
+          if reset_counter % 200 == 0:
+              print("resetting")
+              state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
+              mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+              mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+              ctrl_src = np.asarray(state.data.ctrl)
+              mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+              mujoco.mj_step(mj_model_vis, mj_data_vis)
+              viewer.sync()
+              time.sleep(5)
               
-  #         mujoco.mj_step(mj_model_vis, mj_data_vis)
-  #         viewer.sync()
+          mujoco.mj_step(mj_model_vis, mj_data_vis)
+          viewer.sync()
 
 
-  #         action = jax.random.uniform(
-  #             jax.random.PRNGKey(int(time.time() * 1e6)),
-  #             (env.action_size,),
-  #             minval=-10,
-  #             maxval=10,
-  #         )
-  #         print("Action:", action)
-  #         state = jit_step(state, action)
+          action = jax.random.uniform(
+              jax.random.PRNGKey(int(time.time() * 1e6)),
+              (env.action_size,),
+              minval=-10,
+              maxval=10,
+          )
+          print("Action:", action)
+    
+          state = jit_step(state, action)
+          print("reward", state.reward)
+
 
 
 
