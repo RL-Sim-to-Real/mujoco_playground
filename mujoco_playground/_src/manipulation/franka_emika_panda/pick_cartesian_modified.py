@@ -838,6 +838,9 @@ if __name__ == '__main__':
   import time
   import jax
   import mujoco.viewer
+  import pandas as pd
+
+
   key = jax.random.PRNGKey(1)
   env = PandaPickCubeCartesian3D(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
 
@@ -883,39 +886,72 @@ if __name__ == '__main__':
   #           break
 
     # cv2.destroyAllWindows()
-  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
-      reset_counter = 0
-      while viewer.is_running():
-          reset_counter += 1
-                    # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
-          mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-          mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-          ctrl_src = np.asarray(state.data.ctrl)
-          mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
 
-          if reset_counter % 200 == 0:
-              print("resetting")
-              state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
-              mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-              mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-              ctrl_src = np.asarray(state.data.ctrl)
-              mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
-              mujoco.mj_step(mj_model_vis, mj_data_vis)
-              viewer.sync()
-              time.sleep(5)
+  # action = state.data.ctrl.at[0].add(0.5)
+  # joint1_positions = []
+  # with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+  #     reset_counter = 0
+  #     while viewer.is_running():
+  #         reset_counter += 1
+  #                   # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
+  #         mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  #         mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  #         ctrl_src = np.asarray(state.data.ctrl)
+  #         mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+
+  #         if reset_counter % 100 == 0:
+  #             print("resetting")
+  #             break
+  #             state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
+  #             mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  #             mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  #             ctrl_src = np.asarray(state.data.ctrl)
+  #             mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+  #             mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #             viewer.sync()
+  #             time.sleep(5)
               
-          mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #         mujoco.mj_step(mj_model_vis, mj_data_vis)
+  #         viewer.sync()
+
+
+  #         # action = jax.random.uniform(
+  #         #     jax.random.PRNGKey(int(time.time() * 1e6)),
+  #         #     (env.action_size,),
+  #         #     minval=-10,
+  #         #     maxval=10,
+  #         # )
+  #         print("Action:", action)
+
+  #         state = jit_step(state, action)
+  #         joint1_positions.append(state.data.qpos[0])
+  # print("Joint 1 positions over time:", joint1_positions)
+
+  state = jit_reset(key)
+
+  # Initialize MuJoCo data from JAX state once
+  mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  mujoco.mj_forward(mj_model_vis, mj_data_vis)
+
+  # Add +0.5 rad to the first joint via ctrl, then step MuJoCo (no jit_step)
+  ctrl = np.asarray(state.data.ctrl).copy()
+  ctrl[0] += 0.5  # radians
+  mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl.shape[0])] = ctrl[: mj_data_vis.ctrl.shape[0]]
+
+  joint1_positions = []
+  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+      while viewer.is_running():
+          mujoco.mj_step(mj_model_vis, mj_data_vis)  # advance physics using ctrl
           viewer.sync()
+          joint1_positions.append(float(mj_data_vis.qpos[0]))
+          # time.sleep(0.04)
+          # Optional: exit after some frames
+          if len(joint1_positions) >= 100:
+              break
+  df = pd.DataFrame(joint1_positions, columns=['joint1_pos'])
+  df.to_csv('joint1_positions_sim.csv', index=False)
+  print("Joint 1 positions over time:", joint1_positions)
 
-
-          action = jax.random.uniform(
-              jax.random.PRNGKey(int(time.time() * 1e6)),
-              (env.action_size,),
-              minval=-10,
-              maxval=10,
-          )
-          print("Action:", action)
-          state = jit_step(state, action)
-          print(state.reward)
 
 
