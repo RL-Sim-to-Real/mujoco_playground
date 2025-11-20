@@ -49,7 +49,7 @@ def default_vision_config() -> config_dict.ConfigDict:
 def default_config():
   config = config_dict.create(
       ctrl_dt=0.04,
-      sim_dt=0.005,
+      sim_dt=0.004,
       episode_length=200,
       action_repeat=1,
       # Size of cartesian increment.
@@ -477,11 +477,11 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
       if self._proprioception:
 
         ee_height = data.xpos[self._left_finger_geom][2]
-        joint_p = data.qpos[:7]
+        joint_p = data.qpos[:7]  + jax.random.normal(rng, (7,)) * 0.1 # add noise
         normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
         ) - 1
-        joint_v = data.qvel[:7]
+        joint_v = data.qvel[:7]  + jax.random.normal(rng, (7,)) * 0.1 # add noise
         normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
           jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
         ) - 1
@@ -491,7 +491,7 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
                                 jp.zeros(self.action_size), jp.array([ee_height]), grasp.astype(float)[..., None]])
 
 
-        obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
+        obs["_prop"] = _prop
 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
@@ -665,8 +665,8 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
 
         ee_height = data.xpos[self._left_finger_geom][2]
-        joint_p = data.qpos[:7]
-        joint_v = data.qvel[:7]
+        joint_p = data.qpos[:7] + jax.random.normal(rng_prop, (7,)) * 0.1
+        joint_v = data.qvel[:7] + jax.random.normal(rng_prop, (7,)) * 0.1
         normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
           jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
         ) - 1
@@ -679,8 +679,8 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
                                 normalized_jv,  # Include normalized joint velocity
                                 action, jp.array([ee_height]), grasp.astype(float)[..., None]])
 
-        noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
-        obs["_prop"] = noisy_prop
+       
+        obs["_prop"] = _prop
 
     return state.replace(
         data=data,
@@ -842,7 +842,7 @@ if __name__ == '__main__':
 
 
   key = jax.random.PRNGKey(1)
-  env = PandaPickCubeCartesian3D(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
+  env = PandaPickCubeCartesianModified(config_overrides={'vision': False, 'action': "joint", "actuator":"position"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model

@@ -49,7 +49,7 @@ def default_vision_config() -> config_dict.ConfigDict:
 def default_config():
   config = config_dict.create(
       ctrl_dt=0.04,
-      sim_dt=0.005,
+      sim_dt=0.004,
       episode_length=200,
       action_repeat=1,
       # Size of cartesian increment.
@@ -346,7 +346,7 @@ class PandaPushCube(panda.PandaBase):
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
-    x_plane = self._start_tip_transform[0, 3] - 0.03  # Account for finite gain
+    x_plane = self._start_tip_transform[0, 3] - 0.03 # Account for finite gain and 0.05 for real position
     # randomize end effector position
     rng, rng_plane = jax.random.split(rng)
     x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)
@@ -355,7 +355,7 @@ class PandaPushCube(panda.PandaBase):
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
-        target_tip_pose=jp.asarray([x_plane, 0.0, 0.2]),
+        target_tip_pose=jp.asarray([x_plane, 0.0, 0.1]),
         current_tip_rot = self._start_tip_transform[:3, :3],
         current_jp=jp.asarray(self._init_q[:8]) # careful with this
     )
@@ -374,14 +374,14 @@ class PandaPushCube(panda.PandaBase):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + jax.random.uniform(rng_box, (), minval=0, maxval=self._config.box_init_range_y), # randomize about white strip
+        x_plane + 0.04, # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
 
   
     # Fixed target position to simplify pixels-only training.
-    target_pos = jp.array([box_pos[0] + 0.1, 0.0, 0.03]) # push object 10 cm forward
+    target_pos = jp.array([box_pos[0] + 0.1, 0.0, 0.0]) # push object 10 cm forward
 
     # initialize pipeline state
     init_q = (
@@ -474,11 +474,11 @@ class PandaPushCube(panda.PandaBase):
       if self._proprioception:
 
         ee_height = data.xpos[self._left_finger_geom][2]
-        joint_p = data.qpos[:7]
+        joint_p = data.qpos[:7] + jax.random.normal(rng, 7) * 0.1
         normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
         ) - 1
-        joint_v = data.qvel[:7]
+        joint_v = data.qvel[:7] + jax.random.normal(rng, 7) * 0.1
         normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
           jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
         ) - 1
@@ -488,8 +488,7 @@ class PandaPushCube(panda.PandaBase):
                                 jp.zeros(self.action_size), jp.array([ee_height])])
 
 
-        obs["_prop"] = _prop + jax.random.normal(rng, _prop.shape) * 0.01 # add noise
-
+        obs["_prop"] = _prop 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
   def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -638,13 +637,10 @@ class PandaPushCube(panda.PandaBase):
 
     # Sparse rewards
     box_pos = data.xpos[self._obj_body]
-    hand_contact = collision.geoms_colliding(data, self._box_geom, self._hand_geom)
-        
-    total_reward += 2 * hand_contact # train agent to push with hand instead and not fingers
-    finger_box_collision = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) |\
+
+    finger_box_contact = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) |\
     collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
-    no_finger_box_collision = (1-finger_box_collision).astype(float)
-    total_reward += no_finger_box_collision
+    total_reward += finger_box_contact
     success = self._get_success(data, state.info)
     total_reward += success * self._config.reward_config.success_reward
     # jax.debug.print("Total reward: {}", total_reward)
@@ -724,8 +720,8 @@ class PandaPushCube(panda.PandaBase):
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
 
         ee_height = data.xpos[self._left_finger_geom][2]
-        joint_p = data.qpos[:7]
-        joint_v = data.qvel[:7]
+        joint_p = data.qpos[:7] + jax.random.normal(rng_prop, 7) * 0.1
+        joint_v = data.qvel[:7] + jax.random.normal(rng_prop, 7) * 0.1
         normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
           jp.array(self._jnt_vel_range())[:, 1] - jp.array(self._jnt_vel_range())[:, 0]
         ) - 1
@@ -737,8 +733,8 @@ class PandaPushCube(panda.PandaBase):
                                 normalized_jv,  # Include normalized joint velocity
                                 action, jp.array([ee_height])])
 
-        noisy_prop = _prop + jax.random.normal(rng_prop, _prop.shape) * 0.01
-        obs["_prop"] = noisy_prop
+
+        obs["_prop"] = _prop
 
     return state.replace(
         data=data,
