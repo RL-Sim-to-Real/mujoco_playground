@@ -348,16 +348,18 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
-    x_plane = self._start_tip_transform[0, 3] - 0.03  # Account for finite gain
+    # x_plane = self._start_tip_transform[0, 3] - 0.03  # Account for finite gain
+    x_plane = 0.57 # this value is closer to the real robot setup
     # randomize end effector position
     rng, rng_plane = jax.random.split(rng)
-    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)
-
-    
+    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02)
+    target_tip_pose=jp.asarray([x_plane, 
+                                  jax.random.uniform(rng_plane, (), minval=-0.01, maxval=0.01), 
+                                  0.2 + jax.random.uniform(rng_plane, (), minval=-0.005, maxval=0.005)])
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
-        target_tip_pose=jp.asarray([x_plane, 0.0, 0.2]),
+        target_tip_pose=target_tip_pose,
         current_tip_rot = self._start_tip_transform[:3, :3],
         current_jp=jp.asarray(self._init_q[:8]) # careful with this
     )
@@ -382,7 +384,7 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
     ])
 
     # Fixed target position to simplify pixels-only training.
-    target_pos = jp.array([x_plane, 0.0, 0.20])
+    target_pos = jp.array([x_plane, target_tip_pose[1], 0.2])
 
     # initialize pipeline state
     init_q = (
@@ -438,7 +440,8 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
         'target_pos': target_pos,
         'reached_box': jp.array(0.0, dtype=float),
         'prev_reward': jp.array(0.0, dtype=float),
-        'current_pos': self._start_tip_transform[:3, 3],
+        'current_pos': target_tip_pose,
+        'reset_pos': target_tip_pose,
         'newly_reset': jp.array(False, dtype=bool),
         'prev_action': jp.zeros(self.action_size),
         '_steps': jp.array(0, dtype=int),
@@ -516,7 +519,7 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
         newly_reset, 0.0, state.info['prev_reward']
     )
     state.info['current_pos'] = jp.where(
-        newly_reset, self._start_tip_transform[:3, 3], state.info['current_pos']
+        newly_reset, state.info['reset_pos'], state.info['current_pos']
     )
     state.info['reached_box'] = jp.where(
         newly_reset, 0.0, state.info['reached_box']
@@ -697,7 +700,7 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
         self._vision
     ):  # Randomized camera positions cannot see location along y line.
       box_pos, target_pos = box_pos[2], target_pos[2]
-    return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+    return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold # if the height difference is less than threshold
   
   def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 
