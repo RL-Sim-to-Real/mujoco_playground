@@ -89,7 +89,7 @@ def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.network_factory.policy_hidden_layer_sizes = (256, 256)
     rl_config.num_resets_per_eval = 1
     rl_config.max_grad_norm = 1.0
-  elif env_name == "PandaPickCubeCartesian3D":
+  elif env_name == "PandaPickCuboid":
     rl_config.num_timesteps = 5_000_000
     rl_config.num_evals = 5
     rl_config.unroll_length = 10
@@ -201,7 +201,7 @@ def brax_vision_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.batch_size = 256
     rl_config.reward_scaling = 0.1
     rl_config.num_resets_per_eval = 1
-  elif env_name == "PandaPickCubeCartesian3D":
+  elif env_name == "PandaPickCuboid":
     rl_config.num_timesteps = 5_000_000
     rl_config.num_evals = 5
     rl_config.unroll_length = 10

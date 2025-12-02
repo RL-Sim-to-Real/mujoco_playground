@@ -25,6 +25,7 @@ import mujoco
 from mujoco import mjx
 import numpy as np
 
+from mujoco_playground._src.manipulation.franka_emika_panda.actuator import actuator_map
 from mujoco_playground._src import collision
 from mujoco_playground._src import mjx_env
 from mujoco_playground._src.manipulation.franka_emika_panda import panda
@@ -211,7 +212,7 @@ def adjust_brightness(img, scale):
   return jp.clip(img * scale, 0, 1)
 
 
-class PandaPickCubeCartesian3D(pick.PandaPickCube):
+class PandaPickCuboid(pick.PandaPickCube):
   """Environment for training the Franka Panda robot to pick up a cube in
   Cartesian space."""
 
@@ -545,15 +546,23 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
     if self._config.action == 'cartesian_increment':
       increment = jp.zeros(4)
       increment = action  # directly set x, y, z and gripper commands.
+
+      # this function was created with only position control in mind
       ctrl, new_tip_position, no_soln = self._move_tip(
           state.info['current_pos'],
           self._start_tip_transform[:3, :3],
-          data.ctrl,
+          data.qpos[:8], # should be current joint positions including gripper
           increment,
       )
+
+      if self._config.actuator == 'velocity': # careful with this
+        delta_q = ctrl[:7] - data.qpos[:7] # calculate joint increments excluding gripper
+        joint_cntrl = actuator_map("joint_increment", self._config.actuator, delta_q, data.qpos[:7], self._config.ctrl_dt) # ctrl is target joint pos
+        ctrl = ctrl.at[:7].set(joint_cntrl)
+
       state.info.update({'current_pos': new_tip_position})
     elif self._config.action in {'joint_increment', 'joint'}:
-      ctrl, no_soln = self._move_joints(data.ctrl, action)
+      ctrl, no_soln = self._move_joints(data.qpos[:7], action)
     else:
       raise ValueError(f"Invalid action type: {self._config.action}")
       
@@ -767,16 +776,31 @@ class PandaPickCubeCartesian3D(pick.PandaPickCube):
 
     return new_ctrl, new_tip_pos, no_soln
 
-  def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
-    new_ctrl = current_ctrl
-    scaled_action = action[:-1] * self._config.action_scale
+  def _move_joints(self, current_qpos: jax.Array, action: jax.Array):
+    
+    scaled_action = action[:-1] * self._config.action_scale # scake everything except gripper
+    gripper_raw = action[-1]                                 # (batch,)
+    gripper_raw = gripper_raw[..., None]  
     if self._config.action == 'joint_increment':
       # Incremental joint control.
-      new_ctrl = new_ctrl.at[:7].add(scaled_action)
+      joints = actuator_map(self._config.action,
+                            self._config.actuator,
+                            scaled_action,
+                            current_qpos,
+                            self._config.ctrl_dt)            # (batch,7)
+      new_ctrl = jp.concatenate([joints, gripper_raw], axis=-1)  # (batch,8)
+
     elif self._config.action == 'joint':
       # Absolute joint control.
-      new_ctrl = new_ctrl.at[:7].set(scaled_action)
-      if self._config.actuator == 'torque':
+      new_ctrl = jp.concatenate([scaled_action, gripper_raw], axis=-1)
+      if self._config.actuator == 'position': # always assumes action as velocity
+        joints = actuator_map(self._config.action,
+                      'velocity-position',
+                      scaled_action,
+                      current_qpos,
+                      self._config.ctrl_dt)            # (batch,7)
+        new_ctrl = jp.concatenate([joints, gripper_raw], axis=-1)  # (batch,8)
+      elif self._config.actuator == 'torque':
         new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
                                                 -self._max_torque / self._gear, self._max_torque / self._gear))
     close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
@@ -845,7 +869,7 @@ if __name__ == '__main__':
 
 
   key = jax.random.PRNGKey(1)
-  env = PandaPickCubeCartesianModified(config_overrides={'vision': False, 'action': "joint", "actuator":"position"})
+  env = PandaPickCuboid(config_overrides={'vision': False, 'action': "joint", "actuator":"position"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model
