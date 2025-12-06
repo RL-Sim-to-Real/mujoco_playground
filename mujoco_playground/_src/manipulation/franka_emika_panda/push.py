@@ -378,7 +378,7 @@ class PandaPushCuboid(panda.PandaBase):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + 0.05, # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
+        jax.random.uniform(rng_box, minval=0.52, maxval=0.62), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
@@ -459,6 +459,7 @@ class PandaPushCuboid(panda.PandaBase):
             self._config.action_history_length,
         )),  # Gripper only
         'prev_qacc': jp.zeros(7),
+        'prev_box_pos': box_pos,
     }
 
     reward, done = jp.zeros(2)
@@ -587,6 +588,11 @@ class PandaPushCuboid(panda.PandaBase):
     state.info['prev_reward'] = jp.where(
         newly_reset, 0.0, state.info['prev_reward']
     )
+    state.info['prev_box_pos'] = jp.where(
+        newly_reset,
+        state.data.xpos[self._obj_body],
+        state.info['prev_box_pos'],
+    )
     state.info['current_pos'] = jp.where(
         newly_reset, state.info['reset_pos'], state.info['current_pos']
     )
@@ -633,44 +639,14 @@ class PandaPushCuboid(panda.PandaBase):
     data = mjx_env.step(self._mjx_model, data, ctrl, self.n_substeps)
 
     # Dense rewards
-    raw_rewards = self._get_reward(data, state.info)
-    rewards = {
-        k: v * self._config.reward_config.reward_scales[k]
-        for k, v in raw_rewards.items()
-    }
-
-    
-
-    total_reward = jp.clip(sum(rewards.values()), -1e4, 1e4)
-
-    if not self._vision:
-      # Vision policy cannot access the required state-based observations.
-      da = jp.linalg.norm(action - state.info['prev_action'])
-      state.info['prev_action'] = action
-      total_reward += self._config.reward_config.action_rate * da
-      total_reward += no_soln * self._config.reward_config.no_soln_reward
-
-    # Sparse rewards
     box_pos = data.xpos[self._obj_body]
+    reward = jp.linalg.norm(box_pos - state.info['prev_box_pos'])
 
-    finger_box_contact = collision.geoms_colliding(data, self._box_geom, self._left_finger_geom) |\
-    collision.geoms_colliding(data, self._box_geom, self._right_finger_geom)
-    total_reward += finger_box_contact
-    success = self._get_success(data, state.info)
-    total_reward += success * self._config.reward_config.success_reward
-    # jax.debug.print("Total reward: {}", total_reward)
-    # Reward progress
-    reward = jp.maximum(
-        total_reward - state.info['prev_reward'], jp.zeros_like(total_reward)
-    )
-    # reward = total_reward
-    state.info['prev_reward'] = jp.maximum(
-        total_reward, state.info['prev_reward']
-    )
-    reward = jp.where(newly_reset, 0.0, reward)  # Prevent first-step artifact
-
+    state.info['prev_box_pos'] = box_pos
+    
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
+    out_of_bounds |= jp.logical_not(self._cube_within_strip_bounds(data))
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
 
     hand_floor_collision = [
@@ -696,17 +672,15 @@ class PandaPushCuboid(panda.PandaBase):
     
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
-    state.metrics.update(success=success.astype(float))
-    state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
-    state.metrics.update({
-        'reward/success': (success * self._config.reward_config.success_reward).astype(float),
-    })
-
+    # state.metrics.update(success=success.astype(float))
+    # state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
+    # state.metrics.update({
+    #     'reward/success': (success * self._config.reward_config.success_reward).astype(float),
+    # })
     done = (
         out_of_bounds
         | jp.isnan(data.qpos).any()
         | jp.isnan(data.qvel).any()
-        | success
     )
     # jax.debug.print("Done: {}", done)
     # jax.debug.print("out of bounds: {}", out_of_bounds)
@@ -790,6 +764,24 @@ class PandaPushCuboid(panda.PandaBase):
     
     new_jp = current_jp.at[:7].set(out_jp)
     return new_jp, target_tip_pose, no_soln
+  
+  def _cube_within_strip_bounds(self, data: mjx.Data) -> jax.Array:
+    """Return True if the cube center is inside the A4 (white_strip) xy bounds
+    and its bottom is above the strip plane (no penetration)."""
+    # Strip geom pose/size (visual A4 paper)
+    sid = self._mj_model.geom('white_strip').id
+    strip_pos = jp.asarray(self._mj_model.geom_pos[sid])       # [x, y, z]
+    strip_size = jp.asarray(self._mj_model.geom_size[sid])     # [hx, hy, hz] half-extents
+
+    # Cube world pose
+    box_pos = data.xpos[self._obj_body]                        # center [x, y, z]
+
+    # In-plane bounds (x,y inside strip rectangle)
+    in_x = jp.abs(box_pos[0] - strip_pos[0]) <= strip_size[0]
+    in_y = jp.abs(box_pos[1] - strip_pos[1]) <= strip_size[1]
+
+
+    return (in_x & in_y)
 
 
   def _move_tip(
