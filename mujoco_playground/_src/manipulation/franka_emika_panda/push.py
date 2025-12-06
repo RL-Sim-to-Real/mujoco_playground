@@ -61,7 +61,7 @@ def default_config():
               # Box goes to the target mocap.
               box_target=8.0,
               # Do not collide the gripper with the floor.
-              no_floor_collision=0.25,
+              no_floor_collision=0.05,
               # Destabilizes training in cartesian action space.
               robot_target_qpos=0.0,
           ),
@@ -209,7 +209,7 @@ def adjust_brightness(img, scale):
   return jp.clip(img * scale, 0, 1)
 
 
-class PandaPushCube(panda.PandaBase):
+class PandaPushCuboid(panda.PandaBase):
   """Environment for training the Franka Panda robot to pick up a cube in
   Cartesian space."""
 
@@ -228,7 +228,7 @@ class PandaPushCube(panda.PandaBase):
         / 'manipulation'
         / 'franka_emika_panda'
         / 'xmls'
-        / 'mjx_single_cube_camera_modified.xml'
+        / 'mjx_single_cube_camera_push.xml'
     )
     self._xml_path = xml_path.as_posix()
 
@@ -276,7 +276,7 @@ class PandaPushCube(panda.PandaBase):
       except ImportError:
         warnings.warn(
             'Madrona MJX not installed. Cannot use vision with'
-            ' PandaPushCube.'
+            ' PandaPushCuboid.'
         )
         return
       self.renderer = BatchRenderer(
@@ -346,19 +346,23 @@ class PandaPushCube(panda.PandaBase):
 
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
-    x_plane = self._start_tip_transform[0, 3] - 0.03 # Account for finite gain and 0.05 for real position
+    # x_plane = self._start_tip_transform[0, 3] - 0.03 # Account for finite gain and 0.05 for real position
+    x_plane = 0.55 # position in real world
     # randomize end effector position
     rng, rng_plane = jax.random.split(rng)
-    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)
-
-    
+    x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02)
+    target_tip_pose=jp.asarray([x_plane, 
+                                  jax.random.uniform(rng_plane, (), minval=-0.01, maxval=0.01), 
+                                  0.1 + jax.random.uniform(rng_plane, (), minval=-0.005, maxval=0.005)])
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
-        target_tip_pose=jp.asarray([x_plane, 0.0, 0.1]),
+        target_tip_pose=target_tip_pose,
         current_tip_rot = self._start_tip_transform[:3, :3],
         current_jp=jp.asarray(self._init_q[:8]) # careful with this
     )
+
+
     init_q = (
         jp.array(self._init_q)
         .at[self._robot_arm_qposadr]
@@ -374,14 +378,23 @@ class PandaPushCube(panda.PandaBase):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        x_plane + 0.04, # randomize about white strip
+        x_plane + 0.05, # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
         jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
         0.0,
     ])
 
   
     # Fixed target position to simplify pixels-only training.
-    target_pos = jp.array([box_pos[0] + 0.1, 0.0, 0.0]) # push object 10 cm forward
+    # determine white strip x position (fall back to x_plane if unavailable)
+
+    ws_geom = self._mj_model.geom('white_strip')
+    ws_id = ws_geom.id
+    ws_pos = jp.asarray(self._mj_model.geom_pos[ws_id])
+    white_strip_x = ws_pos[0]
+
+    # target is white strip of line
+    target_pos = jp.array([white_strip_x, box_pos[1], box_pos[2]])
+
 
     # initialize pipeline state
     init_q = (
@@ -403,6 +416,7 @@ class PandaPushCube(panda.PandaBase):
     # data = data.replace(
     #   xpos=data.xpos.at[self._white_strip_geom, 0].set(x_plane)
     # )
+
 
     target_quat = jp.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     data = data.replace(
@@ -436,7 +450,8 @@ class PandaPushCube(panda.PandaBase):
         'target_pos': target_pos,
         'reached_box': jp.array(0.0, dtype=float),
         'prev_reward': jp.array(0.0, dtype=float),
-        'current_pos': self._start_tip_transform[:3, 3],
+        'current_pos': target_tip_pose,
+        'reset_pos': target_tip_pose,
         'newly_reset': jp.array(False, dtype=bool),
         'prev_action': jp.zeros(self.action_size),
         '_steps': jp.array(0, dtype=int),
@@ -487,14 +502,14 @@ class PandaPushCube(panda.PandaBase):
                                 normalized_jv, 
                                 jp.zeros(self.action_size), jp.array([ee_height])])
 
-
+        
         obs["_prop"] = _prop 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
   def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
     target_pos = info["target_pos"]
     box_pos = data.xpos[self._obj_body]
-    box_pos = box_pos.at[0].add(-0.02) # reach for the back of the box
+    box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
     gripper_pos = data.site_xpos[self._gripper_site]
     pos_err = jp.linalg.norm(target_pos - box_pos)
     box_mat = data.xmat[self._obj_body]
@@ -573,7 +588,7 @@ class PandaPushCube(panda.PandaBase):
         newly_reset, 0.0, state.info['prev_reward']
     )
     state.info['current_pos'] = jp.where(
-        newly_reset, self._start_tip_transform[:3, 3], state.info['current_pos']
+        newly_reset, state.info['reset_pos'], state.info['current_pos']
     )
     state.info['reached_box'] = jp.where(
         newly_reset, 0.0, state.info['reached_box']
@@ -624,7 +639,7 @@ class PandaPushCube(panda.PandaBase):
         for k, v in raw_rewards.items()
     }
 
-    # Penalize collision with box.
+    
 
     total_reward = jp.clip(sum(rewards.values()), -1e4, 1e4)
 
@@ -888,7 +903,7 @@ if __name__ == '__main__':
   import jax
   import mujoco.viewer
   key = jax.random.PRNGKey(1)
-  env = PandaPushCube(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
+  env = PandaPushCuboid(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model

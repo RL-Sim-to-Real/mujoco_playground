@@ -59,7 +59,7 @@ def domain_randomize(
     mjx_model: mjx.Model, num_worlds: int
 ) -> Tuple[mjx.Model, mjx.Model]:
   """Tile the necessary axes for the Madrona BatchRenderer."""
-  mj_model = push.PandaPushCube().mj_model
+  mj_model = push.PandaPushCuboid().mj_model
   floor_geom_id = mj_model.geom('floor').id
   box_geom_id = mj_model.geom('box').id
   custom_wood_material_id = mj_model.material('custom_wood').id
@@ -131,13 +131,13 @@ def domain_randomize(
 
     #### Cameras ####
     key_pos, key_ori, key = jax.random.split(key, 3)
-    cam_offset = jax.random.uniform(key_pos, (3,), minval=-0.015, maxval=0.015)
+    cam_offset = jax.random.uniform(key_pos, (3,), minval=-0.01, maxval=0.01)
     assert (
         len(mjx_model.cam_pos) == 1
     ), f'Expected single camera, got {len(mjx_model.cam_pos)}'
     cam_pos = mjx_model.cam_pos.at[0].set(mjx_model.cam_pos[0] + cam_offset)
     cam_quat = mjx_model.cam_quat.at[0].set(
-        perturb_orientation(key_ori, mjx_model.cam_quat[0], 1)
+        perturb_orientation(key_ori, mjx_model.cam_quat[0], 0.2)
     )
 
     #### Lighting ####
