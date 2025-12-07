@@ -51,6 +51,7 @@ def default_config():
       ctrl_dt=0.04,
       sim_dt=0.004,
       episode_length=200,
+      frame_stack_size=1,
       action_repeat=1,
       # Size of cartesian increment.
       action_scale=0.005,
@@ -460,6 +461,8 @@ class PandaPushCuboid(panda.PandaBase):
         )),  # Gripper only
         'prev_qacc': jp.zeros(7),
         'prev_box_pos': box_pos,
+        'frame_stack': jp.zeros((self._config.vision_config.render_height, 
+                                 self._config.vision_config.render_width, 3 * self._config.frame_stack_size), dtype=float)
     }
 
     reward, done = jp.zeros(2)
@@ -485,6 +488,9 @@ class PandaPushCuboid(panda.PandaBase):
       obs = jp.asarray(rgb[0][..., :3], dtype=jp.float32) / 255.0
       obs = adjust_brightness(obs, brightness)
       obs = augment_image(rng_img, img=obs, overlay=self._overlay)
+      # frame stack along color channel
+      obs = jp.concat([obs] * self._config.frame_stack_size, axis=-1)
+      info.update({'frame_stack': obs})
       obs = {'pixels/view_0': obs}
 
       if self._proprioception:
@@ -640,13 +646,33 @@ class PandaPushCuboid(panda.PandaBase):
 
     # Dense rewards
     box_pos = data.xpos[self._obj_body]
-    reward = jp.linalg.norm(box_pos - state.info['prev_box_pos'])
-
+    reward = jp.linalg.norm(box_pos[:2] - state.info['prev_box_pos'][:2]) * 10 #x,y displacement
+    # penalize moving away from center of white geom page
+    # reward += -5 * jp.linalg.norm(box_pos[:2] - jp.array([0.57,0.0])) # keep near center of white boundary
     state.info['prev_box_pos'] = box_pos
+
+    box_R = data.xmat[self._obj_body].reshape(3, 3)  # row-major
+    # Alignment of local axes with world-up [0,0,1]
+    # R[2,0] = dot(up, local x), R[2,1] = dot(up, local y), R[2,2] = dot(up, local z)
+    tilt_x = jp.abs(box_R[2, 0])
+    tilt_y = jp.abs(box_R[2, 1])
+    cos_upright = box_R[2, 2]
+
+    # Thresholds: allow small numerical noise, but no tilt
+    tilt_thresh = jp.sin(jp.pi * 5.0 / 180.0)  # ~5 deg tolerance
+    upright_thresh = jp.cos(jp.pi * 5.0 / 180.0)
+
+    # Forbidden if local x or y aligns with up (tilt) or local z not upright enough
+    tilted = jp.logical_or(tilt_x > tilt_thresh, tilt_y > tilt_thresh)
+    not_upright = cos_upright < upright_thresh
+
     
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
     out_of_bounds |= jp.logical_not(self._cube_within_strip_bounds(data))
+    out_of_bounds = jp.logical_or(out_of_bounds, tilted)
+    out_of_bounds = jp.logical_or(out_of_bounds, not_upright)
+    
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
 
     hand_floor_collision = [
@@ -704,6 +730,14 @@ class PandaPushCuboid(panda.PandaBase):
       # augment image
       rng_img = state.info['rng_img']  # Use the same RNG as in reset for consistency
       obs = augment_image(rng_img, img=obs, overlay=self._overlay)
+      # frame stack along color channel
+      prev_frame_stack = state.info['frame_stack']
+      new_frame_stack = jp.concatenate(
+          [prev_frame_stack[..., 3:], obs], axis=-1
+      )
+      # jax.debug.print("Frame stack shape: {}", new_frame_stack.shape)
+      state.info['frame_stack'] = new_frame_stack
+      obs = new_frame_stack
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
@@ -830,6 +864,7 @@ class PandaPushCuboid(panda.PandaBase):
       # Absolute joint control.
       new_ctrl = new_ctrl.at[:7].set(scaled_action)
       if self._config.actuator == 'torque':
+        raise ValueError("Don't use torque")
         new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
                                                 -self._max_torque / self._gear, self._max_torque / self._gear))
     # close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
