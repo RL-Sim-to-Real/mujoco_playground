@@ -54,6 +54,7 @@ def default_config():
       action_repeat=1,
       # Size of cartesian increment.
       action_scale=0.005,
+      frame_stack_size=1,
       reward_config=config_dict.create(
           reward_scales=config_dict.create(
               # Gripper goes to the box.
@@ -383,6 +384,15 @@ class PandaPushCuboid(panda.PandaBase):
         0.0,
     ])
 
+    # Sample yaw about world Z
+    rng, rng_yaw = jax.random.split(rng)
+    yaw = jax.random.uniform(rng_yaw, (), minval=-jp.pi, maxval=jp.pi)
+
+    # MuJoCo quaternions are (w, x, y, z). Pure Z-rotation:
+    # q = [cos(yaw/2), 0, 0, sin(yaw/2)]
+    cy = jp.cos(yaw / 2.0)
+    sy = jp.sin(yaw / 2.0)
+    box_quat = jp.array([cy, 0.0, 0.0, sy], dtype=float)
   
     # Fixed target position to simplify pixels-only training.
     # determine white strip x position (fall back to x_plane if unavailable)
@@ -393,10 +403,11 @@ class PandaPushCuboid(panda.PandaBase):
     white_strip_x = ws_pos[0]
 
     # target is white strip of line
-    target_pos = jp.array([white_strip_x, box_pos[1], box_pos[2]])
+    target_pos = jp.array([white_strip_x, 0, 0])
 
 
     # initialize pipeline state
+    init_q = jp.array(init_q).at[self._obj_qposadr + 3 : self._obj_qposadr + 7].set(box_quat) 
     init_q = (
         jp.array(init_q) # build on top of previous init_q
         .at[self._obj_qposadr : self._obj_qposadr + 3]
@@ -509,14 +520,14 @@ class PandaPushCuboid(panda.PandaBase):
   def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
     target_pos = info["target_pos"]
     box_pos = data.xpos[self._obj_body]
-    box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
+    box_pos = box_pos.at[0].add(-0.03) # offset to not hit the cube
     gripper_pos = data.site_xpos[self._gripper_site]
     pos_err = jp.linalg.norm(target_pos - box_pos)
     box_mat = data.xmat[self._obj_body]
     target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
     rot_err = jp.linalg.norm(target_mat.ravel()[:6] - box_mat.ravel()[:6])
 
-    box_target = 1 - jp.tanh(5 * (0.9 * pos_err + 0.1 * rot_err))
+    box_target = 1 - jp.tanh(5 * (0.6 * pos_err + 0.4 * rot_err))
     gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
     robot_target_qpos = 1 - jp.tanh(
         jp.linalg.norm(
@@ -540,7 +551,7 @@ class PandaPushCuboid(panda.PandaBase):
     info["reached_box"] = 1.0 * jp.maximum(
         info["reached_box"],
         (jp.linalg.norm(box_pos - gripper_pos) < 0.012),
-    )
+    ) # if gripper is within 1.2cm of box, consider it reached give it a reward 1
 
     rewards = {
         "gripper_box": gripper_box,
@@ -766,7 +777,14 @@ class PandaPushCuboid(panda.PandaBase):
         self._vision
     ):  # Randomized camera positions cannot see location along y line.
       box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
-    return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+    rot_error = jp.linalg.norm(
+        math.quat_to_mat(data.mocap_quat[self._mocap_target]).ravel()[:6]
+        - data.xmat[self._obj_body].ravel()[:6]
+    )
+    pos_ok = jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+    rot_ok = rot_error < 0.3
+
+    return jp.logical_and(pos_ok, rot_ok)
   
   def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 
