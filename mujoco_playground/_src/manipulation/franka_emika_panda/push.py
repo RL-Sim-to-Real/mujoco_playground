@@ -58,9 +58,10 @@ def default_config():
       reward_config=config_dict.create(
           reward_scales=config_dict.create(
               # Gripper goes to the box.
-              gripper_box=4.0,
+              gripper_box=2.0,
               # Box goes to the target mocap.
               box_target=8.0,
+              box_orientation=6.0,
               # Do not collide the gripper with the floor.
               no_floor_collision=0.05,
               # Destabilizes training in cartesian action space.
@@ -520,14 +521,15 @@ class PandaPushCuboid(panda.PandaBase):
   def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
     target_pos = info["target_pos"]
     box_pos = data.xpos[self._obj_body]
-    box_pos = box_pos.at[0].add(-0.03) # offset to not hit the cube
+    box_pos = box_pos.at[0].add(-0.025) # offset to not hit the cube
     gripper_pos = data.site_xpos[self._gripper_site]
-    pos_err = jp.linalg.norm(target_pos - box_pos)
+    pos_err = jp.linalg.norm(target_pos[:2] - box_pos[:2])
     box_mat = data.xmat[self._obj_body]
     target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
     rot_err = jp.linalg.norm(target_mat.ravel()[:6] - box_mat.ravel()[:6])
 
-    box_target = 1 - jp.tanh(5 * (0.6 * pos_err + 0.4 * rot_err))
+    box_target = 1 - jp.tanh(5 *  pos_err)
+    box_orientation = 1 - jp.tanh(5 * rot_err)
     gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
     robot_target_qpos = 1 - jp.tanh(
         jp.linalg.norm(
@@ -556,6 +558,7 @@ class PandaPushCuboid(panda.PandaBase):
     rewards = {
         "gripper_box": gripper_box,
         "box_target": box_target * info["reached_box"],
+        "box_orientation": box_orientation,
         "no_floor_collision": no_floor_collision,
         "robot_target_qpos": robot_target_qpos,
     }
@@ -782,9 +785,10 @@ class PandaPushCuboid(panda.PandaBase):
         - data.xmat[self._obj_body].ravel()[:6]
     )
     pos_ok = jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
-    rot_ok = rot_error < 0.3
+    rot_ok = rot_error < 0.7
 
     return jp.logical_and(pos_ok, rot_ok)
+    # return pos_ok
   
   def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 
