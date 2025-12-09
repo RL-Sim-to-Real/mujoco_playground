@@ -59,8 +59,7 @@ def default_config():
           reward_scales=config_dict.create(
               # Gripper goes to the box.
               gripper_box=4.0,
-              # Box goes to the target mocap.
-              box_target=8.0,
+
               # Do not collide the gripper with the floor.
               no_floor_collision=0.05,
               # Destabilizes training in cartesian action space.
@@ -518,12 +517,7 @@ class PandaPushCuboid(panda.PandaBase):
     box_pos = data.xpos[self._obj_body]
     box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
     gripper_pos = data.site_xpos[self._gripper_site]
-    pos_err = jp.linalg.norm(target_pos - box_pos)
-    box_mat = data.xmat[self._obj_body]
-    target_mat = math.quat_to_mat(data.mocap_quat[self._mocap_target])
-    rot_err = jp.linalg.norm(target_mat.ravel()[:6] - box_mat.ravel()[:6])
 
-    box_target = 1 - jp.tanh(5 * (0.9 * pos_err + 0.1 * rot_err))
     gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
     robot_target_qpos = 1 - jp.tanh(
         jp.linalg.norm(
@@ -551,7 +545,6 @@ class PandaPushCuboid(panda.PandaBase):
 
     rewards = {
         "gripper_box": gripper_box,
-        "box_target": box_target * info["reached_box"],
         "no_floor_collision": no_floor_collision,
         "robot_target_qpos": robot_target_qpos,
     }
@@ -646,9 +639,26 @@ class PandaPushCuboid(panda.PandaBase):
 
     # Dense rewards
     box_pos = data.xpos[self._obj_body]
-    reward = jp.linalg.norm(box_pos[:2] - state.info['prev_box_pos'][:2]) * 10 #x,y displacement
+    # raw_rewards = self._get_reward(data, state.info)
+    # rewards = {
+    #     k: v * self._config.reward_config.reward_scales[k]
+    #     for k, v in raw_rewards.items()
+    # }
+
+    # # Penalize collision with box.
+
+    # total_reward = jp.clip(sum(rewards.values()), -1e4, 1e4)
+
+    total_reward = jp.linalg.norm(box_pos[:2] - state.info['prev_box_pos'][:2]) * 10 #x,y displacement
     # penalize moving away from center of white geom page
     # reward += -5 * jp.linalg.norm(box_pos[:2] - jp.array([0.57,0.0])) # keep near center of white boundary
+    reward = jp.maximum(
+        total_reward - state.info['prev_reward'], jp.zeros_like(total_reward)
+    )
+    state.info['prev_reward'] = jp.maximum(
+        total_reward, state.info['prev_reward']
+    )
+    reward = jp.where(newly_reset, 0.0, reward) 
     state.info['prev_box_pos'] = box_pos
 
     box_R = data.xmat[self._obj_body].reshape(3, 3)  # row-major
@@ -776,7 +786,7 @@ class PandaPushCuboid(panda.PandaBase):
       box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
     return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
   
-  def _move_tip_reset(self, 
+  def git_tip_reset(self, 
                       target_tip_pose: jax.Array, 
                       current_tip_rot: jax.Array, 
                       current_jp: jax.Array
