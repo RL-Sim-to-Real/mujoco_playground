@@ -63,7 +63,7 @@ def domain_randomize(
   floor_geom_id = mj_model.geom('floor').id
   box_geom_id = mj_model.geom('box').id
   custom_wood_material_id = mj_model.material('custom_wood').id
-#   strip_geom_id = mj_model.geom('white_strip').id
+  strip_geom_id = mj_model.geom('white_strip').id
   box_body_id = mj_model.body('box').id
 
   in_axes = jax.tree_util.tree_map(lambda x: None, mjx_model)
@@ -102,9 +102,9 @@ def domain_randomize(
 
 
     strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
-    # geom_rgba = geom_rgba.at[strip_geom_id].set(
-    #     jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
-    # )
+    geom_rgba = geom_rgba.at[strip_geom_id].set(
+        jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
+    )
 
     # # Sample a shade of gray -- I think this is for the floor
 
@@ -124,7 +124,7 @@ def domain_randomize(
         -2
     )  # Use the above randomized colors
     geom_matid = geom_matid.at[floor_geom_id].set(-2)
-    # geom_matid = geom_matid.at[strip_geom_id].set(-2)
+    geom_matid = geom_matid.at[strip_geom_id].set(-2)
     # Set floor material to "custom_wood"
 
     # geom_matid = geom_matid.at[floor_geom_id].set(custom_wood_material_id)
@@ -167,7 +167,7 @@ def domain_randomize(
     ### Randomize mass and intertia of the box ###
 
     key_mass, key = jax.random.split(key, 2)
-    mass_scale = jax.random.uniform(key_mass, (), minval=0.5, maxval=1.5)  
+    mass_scale = jax.random.uniform(key_mass, (), minval=0.9, maxval=1.5)  
     body_mass = mjx_model.body_mass.at[box_body_id].set(
         mjx_model.body_mass[box_body_id] * mass_scale
     )

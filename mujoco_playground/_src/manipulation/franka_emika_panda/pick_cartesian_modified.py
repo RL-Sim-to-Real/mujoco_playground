@@ -570,6 +570,8 @@ class PandaPickCuboid(pick.PandaPickCube):
 
 
     # Simulator step
+    # keep claw open
+    
     data = mjx_env.step(self._mjx_model, data, ctrl, self.n_substeps)
 
     # Dense rewards

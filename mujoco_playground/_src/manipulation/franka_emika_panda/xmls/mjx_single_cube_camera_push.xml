@@ -41,10 +41,12 @@
     <!-- Matching the Realsense D435 -->
     <!-- <camera fovy="42" name="front" pos="1.176 0.001 0.483" xyaxes="0.006 1.000 -0.000 -0.720 0.004 0.694"/> -->
     <geom name="floor" size="0 0 0.05" type="plane" material="custom_wood" contype="1"/>
-    <geom name="white_strip" size="0.025 1 0.001" type="plane" pos="0.70 0 0.001" rgba="1 1 1 1" contype="0" conaffinity="0"/>
+    <!-- A4 paper sized white strip for visual purposes -->
+    <geom name="white_strip" size="0.105 0.15 0.001" type="plane" pos="0.57 0 0.001" rgba="1 1 1 1" contype="0" conaffinity="0"/> 
     <body name="box" pos="1 0 0.03">
       <freejoint/>
       <geom type="box" name="box" size="0.03 0.02 0.02" condim="3"
+        mass="0.048"
        friction="1 .03 .003" rgba="1 0 0 1" contype="2" conaffinity="1" solref="0.01 1"/>
     </body>
     <body mocap="true" name="mocap_target">
