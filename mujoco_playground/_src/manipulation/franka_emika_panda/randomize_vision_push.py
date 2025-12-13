@@ -167,7 +167,7 @@ def domain_randomize(
     ### Randomize mass and intertia of the box ###
 
     key_mass, key = jax.random.split(key, 2)
-    mass_scale = jax.random.uniform(key_mass, (), minval=0.5, maxval=1.5)  
+    mass_scale = jax.random.uniform(key_mass, (), minval=0.9, maxval=1.5)  
     body_mass = mjx_model.body_mass.at[box_body_id].set(
         mjx_model.body_mass[box_body_id] * mass_scale
     )

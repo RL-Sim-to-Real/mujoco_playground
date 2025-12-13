@@ -46,6 +46,7 @@
     <body name="box" pos="1 0 0.03">
       <freejoint/>
       <geom type="box" name="box" size="0.03 0.02 0.02" condim="3"
+        mass="0.048"
        friction="1 .03 .003" rgba="1 0 0 1" contype="2" conaffinity="1" solref="0.01 1"/>
     </body>
     <body mocap="true" name="mocap_target">
