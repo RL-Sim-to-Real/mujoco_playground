@@ -352,8 +352,8 @@ class PandaPushCuboid(panda.PandaBase):
     rng, rng_plane = jax.random.split(rng)
     x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02)
     target_tip_pose=jp.asarray([x_plane, 
-                                  jax.random.uniform(rng_plane, (), minval=-0.01, maxval=0.01), 
-                                  0.1 + jax.random.uniform(rng_plane, (), minval=-0.005, maxval=0.005)])
+                                  jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02), 
+                                  0.2 + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)])
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
@@ -378,12 +378,18 @@ class PandaPushCuboid(panda.PandaBase):
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
     box_pos = jp.array([
-        jax.random.uniform(rng_box, minval=0.52, maxval=0.62), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
-        jax.random.uniform(rng_box, (), minval=-r_range, maxval=r_range),
+        jax.random.uniform(rng_box, minval=0.47, maxval=0.67), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
+        jax.random.uniform(rng_box, (), minval=-0.15, maxval=0.15),
         0.0,
     ])
 
-  
+    # randomize box orientation
+    box_orientation = jp.array([
+        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
+        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
+        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
+    ])
+    init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 6].set(box_orientation)
     # Fixed target position to simplify pixels-only training.
     # determine white strip x position (fall back to x_plane if unavailable)
 
@@ -488,8 +494,9 @@ class PandaPushCuboid(panda.PandaBase):
       obs = adjust_brightness(obs, brightness)
       obs = augment_image(rng_img, img=obs, overlay=self._overlay)
       # frame stack along color channel
-      obs = jp.concat([obs] * self._config.frame_stack_size, axis=-1)
-      info.update({'frame_stack': obs})
+      if self._config.frame_stack_size > 1:
+          obs = jp.concat([obs] * self._config.frame_stack_size, axis=-1)
+          info.update({'frame_stack': obs})
       obs = {'pixels/view_0': obs}
 
       if self._proprioception:
@@ -602,17 +609,6 @@ class PandaPushCuboid(panda.PandaBase):
         newly_reset, jp.zeros(self.action_size), state.info['prev_action']
     )
 
-    # Ocassionally aid exploration.
-    # state.info['rng'], key_swap = jax.random.split(state.info['rng'])
-    # to_sample = newly_reset * jax.random.bernoulli(key_swap, 0.05)
-    # swapped_data = state.data.replace(
-    #     qpos=self._guide_q, ctrl=self._guide_ctrl
-    # )  # help hit the terminal sparse reward.
-    # data = jax.tree_util.tree_map(
-    #     lambda x, y: (1 - to_sample) * x + to_sample * y,
-    #     state.data,
-    #     swapped_data,
-    # )
     data = state.data
     # Cartesian control
 
@@ -639,50 +635,41 @@ class PandaPushCuboid(panda.PandaBase):
 
     # Dense rewards
     box_pos = data.xpos[self._obj_body]
-    # raw_rewards = self._get_reward(data, state.info)
-    # rewards = {
-    #     k: v * self._config.reward_config.reward_scales[k]
-    #     for k, v in raw_rewards.items()
-    # }
+    box_xy = data.xpos[self._obj_body][:2]
+    prev_xy = state.info['prev_box_pos'][:2]
+    delta = jp.linalg.norm(box_xy - prev_xy)
 
-    # # Penalize collision with box.
+    # In-bounds and margin-to-edge (normalized)
+    sid = self._mj_model.geom('white_strip').id
+    strip_pos = jp.asarray(self._mj_model.geom_pos[sid])[:2]
+    strip_half = jp.asarray(self._mj_model.geom_size[sid])[:2]   # [hx, hy]
 
-    # total_reward = jp.clip(sum(rewards.values()), -1e4, 1e4)
+    dx = strip_half[0] - jp.abs(box_xy[0] - strip_pos[0])
+    dy = strip_half[1] - jp.abs(box_xy[1] - strip_pos[1])
+    # margin = jp.minimum(dx, dy)  # how far from closest edge (in meters)
 
-    total_reward = jp.linalg.norm(box_pos[:2] - state.info['prev_box_pos'][:2]) * 10 #x,y displacement
-    # penalize moving away from center of white geom page
-    # reward += -5 * jp.linalg.norm(box_pos[:2] - jp.array([0.57,0.0])) # keep near center of white boundary
-    reward = jp.maximum(
-        total_reward - state.info['prev_reward'], jp.zeros_like(total_reward)
-    )
-    state.info['prev_reward'] = jp.maximum(
-        total_reward, state.info['prev_reward']
-    )
-    reward = jp.where(newly_reset, 0.0, reward) 
-    state.info['prev_box_pos'] = box_pos
+    in_bounds = (dx >= 0) & (dy >= 0)
 
-    box_R = data.xmat[self._obj_body].reshape(3, 3)  # row-major
-    # Alignment of local axes with world-up [0,0,1]
-    # R[2,0] = dot(up, local x), R[2,1] = dot(up, local y), R[2,2] = dot(up, local z)
-    tilt_x = jp.abs(box_R[2, 0])
-    tilt_y = jp.abs(box_R[2, 1])
-    cos_upright = box_R[2, 2]
+    delta = jp.linalg.norm(box_xy - prev_xy)
 
-    # Thresholds: allow small numerical noise, but no tilt
-    tilt_thresh = jp.sin(jp.pi * 5.0 / 180.0)  # ~5 deg tolerance
-    upright_thresh = jp.cos(jp.pi * 5.0 / 180.0)
+    # Zero-baseline reward: only displacement inside bounds
+    w_move = 10.0
+    # no_move = (delta < 0.001).astype(jp.float32)
 
-    # Forbidden if local x or y aligns with up (tilt) or local z not upright enough
-    tilted = jp.logical_or(tilt_x > tilt_thresh, tilt_y > tilt_thresh)
-    not_upright = cos_upright < upright_thresh
+    # keep cube centered
+    ee_xy = data.site_xpos[self._gripper_site][:2]
+    center_delta = jp.linalg.norm(box_xy - ee_xy)
+    w_center = -0.5
+    reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta)
+
+
+    state.info['prev_box_pos'] = data.xpos[self._obj_body] 
+
 
     
     out_of_bounds = jp.any(jp.abs(box_pos) > 1.0)
     out_of_bounds |= box_pos[2] < 0.0
-    out_of_bounds |= jp.logical_not(self._cube_within_strip_bounds(data))
-    out_of_bounds = jp.logical_or(out_of_bounds, tilted)
-    out_of_bounds = jp.logical_or(out_of_bounds, not_upright)
-    
+
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
 
     hand_floor_collision = [
@@ -741,13 +728,14 @@ class PandaPushCuboid(panda.PandaBase):
       rng_img = state.info['rng_img']  # Use the same RNG as in reset for consistency
       obs = augment_image(rng_img, img=obs, overlay=self._overlay)
       # frame stack along color channel
-      prev_frame_stack = state.info['frame_stack']
-      new_frame_stack = jp.concatenate(
-          [prev_frame_stack[..., 3:], obs], axis=-1
-      )
-      # jax.debug.print("Frame stack shape: {}", new_frame_stack.shape)
-      state.info['frame_stack'] = new_frame_stack
-      obs = new_frame_stack
+      if self._config.frame_stack_size > 1:
+        prev_frame_stack = state.info['frame_stack']
+        new_frame_stack = jp.concatenate(
+            [prev_frame_stack[..., 3:], obs], axis=-1
+        )
+        # jax.debug.print("Frame stack shape: {}", new_frame_stack.shape)
+        state.info['frame_stack'] = new_frame_stack
+        obs = new_frame_stack
       obs = {'pixels/view_0': obs }
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
@@ -786,7 +774,7 @@ class PandaPushCuboid(panda.PandaBase):
       box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
     return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
   
-  def git_tip_reset(self, 
+  def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 
                       current_tip_rot: jax.Array, 
                       current_jp: jax.Array
