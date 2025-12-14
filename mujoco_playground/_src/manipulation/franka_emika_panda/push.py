@@ -797,23 +797,6 @@ class PandaPushCuboid(panda.PandaBase):
     new_jp = current_jp.at[:7].set(out_jp)
     return new_jp, target_tip_pose, no_soln
   
-  def _cube_within_strip_bounds(self, data: mjx.Data) -> jax.Array:
-    """Return True if the cube center is inside the A4 (white_strip) xy bounds
-    and its bottom is above the strip plane (no penetration)."""
-    # Strip geom pose/size (visual A4 paper)
-    sid = self._mj_model.geom('white_strip').id
-    strip_pos = jp.asarray(self._mj_model.geom_pos[sid])       # [x, y, z]
-    strip_size = jp.asarray(self._mj_model.geom_size[sid])     # [hx, hy, hz] half-extents
-
-    # Cube world pose
-    box_pos = data.xpos[self._obj_body]                        # center [x, y, z]
-
-    # In-plane bounds (x,y inside strip rectangle)
-    in_x = jp.abs(box_pos[0] - strip_pos[0]) <= strip_size[0]
-    in_y = jp.abs(box_pos[1] - strip_pos[1]) <= strip_size[1]
-
-
-    return (in_x & in_y)
 
 
   def _move_tip(

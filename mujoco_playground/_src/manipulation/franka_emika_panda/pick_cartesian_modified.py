@@ -551,7 +551,7 @@ class PandaPickCuboid(pick.PandaPickCube):
       ctrl, new_tip_position, no_soln = self._move_tip(
           state.info['current_pos'],
           self._start_tip_transform[:3, :3],
-          data.qpos[:8], # should be current joint positions including gripper
+          data.qpos[:8], # expects joint positions
           increment,
       )
 
@@ -562,7 +562,7 @@ class PandaPickCuboid(pick.PandaPickCube):
 
       state.info.update({'current_pos': new_tip_position})
     elif self._config.action in {'joint_increment', 'joint'}:
-      ctrl, no_soln = self._move_joints(data.qpos[:7], action)
+      ctrl, no_soln = self._move_joints(data.ctrl, action)
     else:
       raise ValueError(f"Invalid action type: {self._config.action}")
       
@@ -778,34 +778,22 @@ class PandaPickCuboid(pick.PandaPickCube):
 
     return new_ctrl, new_tip_pos, no_soln
 
-  def _move_joints(self, current_qpos: jax.Array, action: jax.Array):
+  def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
     
-    scaled_action = action[:-1] * self._config.action_scale # scake everything except gripper
-    gripper_raw = action[-1]                                 # (batch,)
-    gripper_raw = gripper_raw[..., None]  
+    new_ctrl = current_ctrl
+    close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
+    scaled_action = action[:-1] * self._config.action_scale
     if self._config.action == 'joint_increment':
       # Incremental joint control.
-      joints = actuator_map(self._config.action,
-                            self._config.actuator,
-                            scaled_action,
-                            current_qpos,
-                            self._config.ctrl_dt)            # (batch,7)
-      new_ctrl = jp.concatenate([joints, gripper_raw], axis=-1)  # (batch,8)
-
+      new_ctrl = new_ctrl.at[:7].add(scaled_action)
     elif self._config.action == 'joint':
       # Absolute joint control.
-      new_ctrl = jp.concatenate([scaled_action, gripper_raw], axis=-1)
-      if self._config.actuator == 'position': # always assumes action as velocity
-        joints = actuator_map(self._config.action,
-                      'velocity-position',
-                      scaled_action,
-                      current_qpos,
-                      self._config.ctrl_dt)            # (batch,7)
-        new_ctrl = jp.concatenate([joints, gripper_raw], axis=-1)  # (batch,8)
-      elif self._config.actuator == 'torque':
-        new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
-                                                -self._max_torque / self._gear, self._max_torque / self._gear))
-    close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
+      new_ctrl = new_ctrl.at[:7].set(scaled_action)
+      if self._config.actuator == 'torque':
+        raise ValueError("Don't use torque")
+        # new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],
+        #                                         -self._max_torque / self._gear, self._max_torque / self._gear))
+    
     jaw_action = jp.where(close_gripper, -1.0, 1.0)
     claw_delta = jaw_action * 0.02  # up to 2 cm movement
     new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
@@ -871,7 +859,7 @@ if __name__ == '__main__':
 
 
   key = jax.random.PRNGKey(1)
-  env = PandaPickCuboid(config_overrides={'vision': False, 'action': "joint", "actuator":"position"})
+  env = PandaPickCuboid(config_overrides={'vision': False, 'action': "cartesian_increment", "actuator":"position"})
 
   # IMPORTANT: use env.mj_model (mujoco.MjModel), not env.mjx_model (mjax model)
   mj_model_vis = env.mj_model
@@ -918,69 +906,70 @@ if __name__ == '__main__':
 
   # action = state.data.ctrl.at[0].add(0.5)
   # joint1_positions = []
-  # with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
-  #     reset_counter = 0
-  #     while viewer.is_running():
-  #         reset_counter += 1
-  #                   # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
-  #         mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-  #         mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-  #         ctrl_src = np.asarray(state.data.ctrl)
-  #         mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+      reset_counter = 0
+      while viewer.is_running():
+          reset_counter += 1
+                    # copy mjx state -> mujoco.MjData (slice safely to handle shape mismatches)
+          mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+          mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+          ctrl_src = np.asarray(state.data.ctrl)
+          mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
 
-  #         if reset_counter % 100 == 0:
-  #             print("resetting")
-  #             break
-  #             state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
-  #             mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-  #             mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-  #             ctrl_src = np.asarray(state.data.ctrl)
-  #             mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
-  #             mujoco.mj_step(mj_model_vis, mj_data_vis)
-  #             viewer.sync()
-  #             time.sleep(5)
+          if reset_counter % 100 == 0:
+              print("resetting")
+              # break
+              state = jit_reset(jax.random.PRNGKey(int(time.time() * 1e6)))
+              mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+              mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+              ctrl_src = np.asarray(state.data.ctrl)
+              mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl_src.shape[0])] = ctrl_src[: mj_data_vis.ctrl.shape[0]]
+              mujoco.mj_step(mj_model_vis, mj_data_vis)
+              viewer.sync()
+              time.sleep(5)
               
-  #         mujoco.mj_step(mj_model_vis, mj_data_vis)
-  #         viewer.sync()
+          mujoco.mj_step(mj_model_vis, mj_data_vis)
+          viewer.sync()
 
 
-  #         # action = jax.random.uniform(
-  #         #     jax.random.PRNGKey(int(time.time() * 1e6)),
-  #         #     (env.action_size,),
-  #         #     minval=-10,
-  #         #     maxval=10,
-  #         # )
-  #         print("Action:", action)
+          action = jax.random.uniform(
+              jax.random.PRNGKey(int(time.time() * 1e6)),
+              (env.action_size,),
+              minval=-1,
+              maxval=1,
+          )
+          action = action.at[-1].set(-1.0)
+          print("Action:", action)
 
-  #         state = jit_step(state, action)
+          state = jit_step(state, action)
   #         joint1_positions.append(state.data.qpos[0])
   # print("Joint 1 positions over time:", joint1_positions)
 
-  state = jit_reset(key)
+  # state = jit_reset(key)
 
-  # Initialize MuJoCo data from JAX state once
-  mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
-  mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
-  mujoco.mj_forward(mj_model_vis, mj_data_vis)
+  # # Initialize MuJoCo data from JAX state once
+  # mj_data_vis.qpos[: mj_data_vis.qpos.shape[0]] = np.asarray(state.data.qpos)[: mj_data_vis.qpos.shape[0]]
+  # mj_data_vis.qvel[: mj_data_vis.qvel.shape[0]] = np.asarray(state.data.qvel)[: mj_data_vis.qvel.shape[0]]
+  # mujoco.mj_forward(mj_model_vis, mj_data_vis)
 
-  # Add +0.5 rad to the first joint via ctrl, then step MuJoCo (no jit_step)
-  ctrl = np.asarray(state.data.ctrl).copy()
-  ctrl[0] += 0.5  # radians
-  mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl.shape[0])] = ctrl[: mj_data_vis.ctrl.shape[0]]
+  # # Add +0.5 rad to the first joint via ctrl, then step MuJoCo (no jit_step)
+  # ctrl = np.asarray(state.data.ctrl).copy()
+  # ctrl[0] += 0.5  # radians
+  # mj_data_vis.ctrl[: min(mj_data_vis.ctrl.shape[0], ctrl.shape[0])] = ctrl[: mj_data_vis.ctrl.shape[0]]
 
-  joint1_positions = []
-  with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
-      while viewer.is_running():
-          mujoco.mj_step(mj_model_vis, mj_data_vis)  # advance physics using ctrl
-          viewer.sync()
-          joint1_positions.append(float(mj_data_vis.qpos[0]))
-          # time.sleep(0.04)
-          # Optional: exit after some frames
-          if len(joint1_positions) >= 100:
-              break
-  df = pd.DataFrame(joint1_positions, columns=['joint1_pos'])
-  df.to_csv('joint1_positions_sim.csv', index=False)
-  print("Joint 1 positions over time:", joint1_positions)
+  # joint1_positions = []
+  # with mujoco.viewer.launch_passive(mj_model_vis, mj_data_vis) as viewer:
+  #     while viewer.is_running():
+  #         mujoco.mj_step(mj_model_vis, mj_data_vis)  # advance physics using ctrl
+  #         viewer.sync()
+  #         joint1_positions.append(float(mj_data_vis.qpos[0]))
+  #         # time.sleep(0.04)
+  #         # Optional: exit after some frames
+  #         if len(joint1_positions) >= 100:
+  #             break
+  # df = pd.DataFrame(joint1_positions, columns=['joint1_pos'])
+  # df.to_csv('joint1_positions_sim.csv', index=False)
+  # print("Joint 1 positions over time:", joint1_positions)
 
 
 
