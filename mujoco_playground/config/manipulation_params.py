@@ -91,7 +91,7 @@ def brax_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.max_grad_norm = 1.0
   elif env_name == "PandaPickCuboid":
     rl_config.num_timesteps = 5_000_000
-    rl_config.num_evals = 5
+    rl_config.num_evals = 10
     rl_config.unroll_length = 10
     rl_config.num_minibatches = 8
     rl_config.num_updates_per_batch = 8
@@ -203,7 +203,7 @@ def brax_vision_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.num_resets_per_eval = 1
   elif env_name == "PandaPickCuboid":
     rl_config.num_timesteps = 5_000_000
-    rl_config.num_evals = 5
+    rl_config.num_evals = 10
     rl_config.unroll_length = 10
     rl_config.num_minibatches = 8
     rl_config.num_updates_per_batch = 8
@@ -218,7 +218,7 @@ def brax_vision_ppo_config(env_name: str) -> config_dict.ConfigDict:
     rl_config.max_grad_norm = 1.0
   elif env_name == "PandaPushCuboid":
     rl_config.num_timesteps = 5_000_000
-    rl_config.num_evals = 5
+    rl_config.num_evals = 10
     rl_config.unroll_length = 10
     rl_config.num_minibatches = 8
     rl_config.num_updates_per_batch = 8

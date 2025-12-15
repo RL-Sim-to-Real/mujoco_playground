@@ -23,6 +23,7 @@ import jax.numpy as jp
 from ml_collections import config_dict
 import mujoco
 from mujoco import mjx
+from mujoco_playground._src.manipulation.franka_emika_panda.actuator import actuator_map
 import numpy as np
 
 from mujoco_playground._src import collision
@@ -613,15 +614,30 @@ class PandaPushCuboid(panda.PandaBase):
     # Cartesian control
 
     if self._config.action == 'cartesian_increment':
-      increment = jp.zeros(3)
-      increment = action  # directly set x, y, z and gripper commands.
-      ctrl, new_tip_position, no_soln = self._move_tip(
+      # increment = jp.zeros(3)
+      # increment = action  # directly set x, y, z and gripper commands.
+      # ctrl, new_tip_position, no_soln = self._move_tip(
+      #     state.info['current_pos'],
+      #     self._start_tip_transform[:3, :3],
+      #     data.ctrl,
+      #     increment,
+      # )
+      increment = jp.zeros(7)
+      increment = action
+      ctrl, new_tip_position, no_soln = self._move_tip_orient(
           state.info['current_pos'],
-          self._start_tip_transform[:3, :3],
-          data.ctrl,
+          panda_kinematics.compute_franka_fk(  # current orientation
+              data.qpos[:7]
+          )[:3, :3],
+          data.qpos[:8], # expects joint positions
           increment,
       )
       state.info.update({'current_pos': new_tip_position})
+
+      if self._config.actuator == 'velocity': # careful with this
+        delta_q = ctrl[:7] - data.qpos[:7] # calculate joint increments excluding gripper
+        joint_cntrl = actuator_map("joint_increment", self._config.actuator, delta_q, data.qpos[:7], self._config.ctrl_dt) # ctrl is target joint pos
+        ctrl = ctrl.at[:7].set(joint_cntrl)
     elif self._config.action in {'joint_increment', 'joint'}:
       ctrl, no_soln = self._move_joints(data.ctrl, action)
     else:
@@ -631,6 +647,7 @@ class PandaPushCuboid(panda.PandaBase):
 
 
     # Simulator step
+    ctrl = ctrl.at[7].set(0.04) # ensure gripper remains open
     data = mjx_env.step(self._mjx_model, data, ctrl, self.n_substeps)
 
     # Dense rewards
@@ -657,8 +674,8 @@ class PandaPushCuboid(panda.PandaBase):
     # no_move = (delta < 0.001).astype(jp.float32)
 
     # keep cube centered
-    ee_xy = data.site_xpos[self._gripper_site][:2]
-    center_delta = jp.linalg.norm(box_xy - ee_xy)
+    ee_pos = data.site_xpos[self._gripper_site]
+    center_delta = jp.linalg.norm(box_pos - ee_pos)
     w_center = -0.5
     reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta)
 
@@ -834,6 +851,127 @@ class PandaPushCuboid(panda.PandaBase):
     new_ctrl = new_ctrl.at[:7].set(out_jp)
 
     return new_ctrl, new_tip_pos, no_soln
+  
+  def _skew(self, w: jax.Array) -> jax.Array:
+    """Skew-symmetric matrix from a 3-vector."""
+    wx, wy, wz = w[0], w[1], w[2]
+    return jp.array([
+        [0.0, -wz,  wy],
+        [wz,  0.0, -wx],
+        [-wy, wx,  0.0],
+    ])
+
+  def _so3_exp(self, w: jax.Array) -> jax.Array:
+    """SO(3) exponential map for a rotation vector w (axis * angle)."""
+    theta2 = jp.dot(w, w)
+    theta = jp.sqrt(theta2 + 1e-12)
+
+    K = self._skew(w)
+
+    # Stable sin(theta)/theta and (1-cos(theta))/theta^2
+    small = theta < 1e-6
+    A = jp.where(small, 1.0 - theta2 / 6.0 + (theta2 * theta2) / 120.0, jp.sin(theta) / theta)
+    B = jp.where(small, 0.5 - theta2 / 24.0 + (theta2 * theta2) / 720.0, (1.0 - jp.cos(theta)) / theta2)
+
+    I = jp.identity(3)
+    return I + A * K + B * (K @ K)
+
+  def _clip_facing_down(self, R: jax.Array, max_tilt_rad: float) -> jax.Array:
+    """
+    Clamp the tool's +Z axis (R[:,2]) to be within max_tilt of world 'down' (0,0,-1),
+    while preserving twist/yaw as much as possible by keeping the x-axis close to original.
+    """
+    down = jp.array([0.0, 0.0, -1.0])
+
+    z = R[:, 2]
+    z = z / (jp.linalg.norm(z) + 1e-12)
+
+    c = jp.clip(jp.dot(z, down), -1.0, 1.0)  # cos(angle to down)
+    tilt = jp.arccos(c)
+
+    def do_clip(_):
+      # Direction of z away from down (tangent component)
+      v = z - jp.dot(z, down) * down
+      v_norm = jp.linalg.norm(v) + 1e-12
+      v_hat = v / v_norm
+
+      # Put z on the cone boundary around down
+      z_clamped = jp.cos(max_tilt_rad) * down + jp.sin(max_tilt_rad) * v_hat
+      z_clamped = z_clamped / (jp.linalg.norm(z_clamped) + 1e-12)
+
+      # Preserve "yaw/twist" by keeping x axis as close as possible, re-orthonormalize
+      x = R[:, 0]
+      x = x - jp.dot(x, z_clamped) * z_clamped
+      x_norm = jp.linalg.norm(x) + 1e-12
+      x_hat = x / x_norm
+
+      y_hat = jp.cross(z_clamped, x_hat)
+      y_hat = y_hat / (jp.linalg.norm(y_hat) + 1e-12)
+
+      # Recompute x to ensure perfect orthonormality
+      x_hat = jp.cross(y_hat, z_clamped)
+      return jp.stack([x_hat, y_hat, z_clamped], axis=1)
+
+    return jp.where(tilt > max_tilt_rad, do_clip(None), R)
+
+  def _move_tip_orient(
+      self,
+      current_tip_pos: jax.Array,
+      current_tip_rot: jax.Array,
+      current_ctrl: jax.Array,
+      action: jax.Array,
+  ) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Calculate new tip pose from cartesian increment + small rotation increment."""
+
+
+    # --- Position update (same as before) ---
+    scaled_pos = action[:3] * self._config.action_scale
+    new_tip_pos = current_tip_pos.at[:3].add(scaled_pos)
+
+    new_tip_pos = new_tip_pos.at[0].set(jp.clip(new_tip_pos[0], 0.25, 0.77))
+    new_tip_pos = new_tip_pos.at[1].set(jp.clip(new_tip_pos[1], -0.32, 0.32))
+    new_tip_pos = new_tip_pos.at[2].set(jp.clip(new_tip_pos[2], 0.02, 0.5))
+
+    # --- Rotation update (NEW) ---
+    # Keep rotation increments small via scaling + optional norm clip
+    rot_scale = getattr(self._config, "rot_action_scale", 0.05)  # rad per step, ~3 degrees
+    max_rot_step = getattr(self._config, "max_rot_step", 0.10)   # rad cap on ||drot||
+    drot = action[3:6] * rot_scale
+    drot_norm = jp.linalg.norm(drot) + 1e-12
+    drot = jp.where(drot_norm > max_rot_step, drot * (max_rot_step / drot_norm), drot)
+
+    dR = self._so3_exp(drot)
+    new_tip_rot = current_tip_rot @ dR  # body-frame incremental rotation
+
+    # Clip overall orientation so tool stays facing down (mostly)
+    max_tilt = getattr(self._config, "max_tilt_rad", 0.35)  # ~20 degrees
+    new_tip_rot = self._clip_facing_down(new_tip_rot, max_tilt)
+
+    # --- Build 4x4 target pose for IK ---
+    new_tip_mat = jp.identity(4)
+    new_tip_mat = new_tip_mat.at[:3, :3].set(new_tip_rot)
+    new_tip_mat = new_tip_mat.at[:3, 3].set(new_tip_pos)
+
+    q7_scale = getattr(self._config, "q7_action_scale", 0.05)   # rad/step
+    q7_min, q7_max = getattr(self._config, "q7_limits", (-2.9, 2.9))  # set from your model
+    q7_des = jp.clip(current_ctrl[6] + action[7] * q7_scale, q7_min, q7_max)
+
+    # --- IK + safety fallback (same pattern as before) ---
+    out_jp = panda_kinematics.compute_franka_ik(
+        new_tip_mat, q7_des, current_ctrl[:7]
+    )
+    no_soln = jp.any(jp.isnan(out_jp))
+    out_jp = jp.where(no_soln, current_ctrl[:7], out_jp)
+    no_soln = jp.logical_or(no_soln, jp.any(jp.isnan(out_jp)))
+
+    # If still NaNs, revert the tip pos (and you may also want to revert rot logically)
+    new_tip_pos = jp.where(jp.any(jp.isnan(out_jp)), current_tip_pos, new_tip_pos)
+    new_tip_rot = jp.where(jp.any(jp.isnan(out_jp)), current_tip_rot, new_tip_rot)
+
+    new_ctrl = current_ctrl
+    new_ctrl = new_ctrl.at[:7].set(out_jp)
+
+    return new_ctrl, new_tip_pos, no_soln
 
   def _move_joints(self, current_ctrl: jax.Array, action: jax.Array):
     new_ctrl = current_ctrl
@@ -848,10 +986,7 @@ class PandaPushCuboid(panda.PandaBase):
         raise ValueError("Don't use torque")
         new_ctrl = new_ctrl.at[:7].set(jp.clip(new_ctrl[:7],\
                                                 -self._max_torque / self._gear, self._max_torque / self._gear))
-    # close_gripper = jp.where(action[-1] < 0, 1.0, 0.0)
-    # jaw_action = jp.where(close_gripper, -1.0, 1.0)
-    # claw_delta = jaw_action * 0.02  # up to 2 cm movement
-    # new_ctrl = new_ctrl.at[7].set(new_ctrl[7] + claw_delta)
+
     no_soln = jp.any(jp.isnan(new_ctrl))
 
     return new_ctrl, no_soln
@@ -860,9 +995,9 @@ class PandaPushCuboid(panda.PandaBase):
   @property
   def action_size(self) -> int:
     if self._config.action == 'cartesian_increment':
-      return 3
+      return 7
     elif self._config.action in {'joint_increment', 'joint'}:
-      return 7 # for all 8 joints
+      return 7 # for all 7 joints
     
     return -1
 
@@ -983,8 +1118,8 @@ if __name__ == '__main__':
           action = jax.random.uniform(
               jax.random.PRNGKey(int(time.time() * 1e6)),
               (env.action_size,),
-              minval=-10,
-              maxval=10,
+              minval=-1,
+              maxval=1,
           )
           print("Action:", action)
     
