@@ -668,18 +668,31 @@ class PandaPushCuboid(panda.PandaBase):
     in_bounds = (dx >= 0) & (dy >= 0) & box_on_ground
 
     delta = jp.linalg.norm(box_xy - prev_xy)
-
+    hand_floor_collision = [
+        collision.geoms_colliding(data, self._floor_geom, g)
+        for g in [
+            self._left_finger_geom,
+            self._right_finger_geom,
+            self._hand_geom,
+        ]
+    ]
+    floor_collision = sum(hand_floor_collision) > 0
     # Zero-baseline reward: only displacement inside bounds
-    w_move = 10.0
+    w_move = 5.0
     # no_move = (delta < 0.001).astype(jp.float32)
 
     # keep cube centered
     ee_pos = data.site_xpos[self._gripper_site]
     center_delta = jp.linalg.norm(box_pos - ee_pos)
     w_center = -0.5
-    reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta)
-    reward = jp.clip(reward, -1e3, 1e3)
+    w_floor = -0.5
+    reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta) + (w_floor * floor_collision)
+    # jax.debug.print("reward {}", reward)
+    # is_nan = jp.any(jp.isnan(reward))
+    # jax.lax.cond(is_nan, lambda _: jax.debug.print("reward {}", reward), lambda _: None, operand=None)
 
+    reward = jp.clip(reward, -1e3, 1e3)
+    
     state.info['prev_box_pos'] = data.xpos[self._obj_body] 
 
 
@@ -689,14 +702,7 @@ class PandaPushCuboid(panda.PandaBase):
 
     state.metrics.update(out_of_bounds=out_of_bounds.astype(float))
 
-    hand_floor_collision = [
-        collision.geoms_colliding(data, self._floor_geom, g)
-        for g in [
-            self._left_finger_geom,
-            self._right_finger_geom,
-            self._hand_geom,
-        ]
-    ]
+
     current_qacc = data.qacc[:7]
     dt = self._config.ctrl_dt
     
@@ -710,7 +716,7 @@ class PandaPushCuboid(panda.PandaBase):
     # Update metrics
     state.metrics.update(jerk=jerk.astype(float))
     
-    floor_collision = sum(hand_floor_collision) > 0
+    
     state.metrics.update(floor_collision=floor_collision.astype(float))
     # state.metrics.update(success=success.astype(float))
     # state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
