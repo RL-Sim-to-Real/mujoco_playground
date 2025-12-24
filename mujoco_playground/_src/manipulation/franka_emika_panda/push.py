@@ -442,7 +442,7 @@ class PandaPushCuboid(panda.PandaBase):
     metrics = {
         'floor_collision': jp.array(0.0, dtype=float),
         'cube_collision': jp.array(0.0),
-        'jerk': jp.array(0.0),
+        'jerk_per_step': jp.array(0.0),
         'success': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
         **{
@@ -714,7 +714,7 @@ class PandaPushCuboid(panda.PandaBase):
     state.info['prev_qacc'] = current_qacc
     
     # Update metrics
-    state.metrics.update(jerk=jerk.astype(float))
+    state.metrics.update(jerk_per_step=jerk.astype(float))
     
     
     state.metrics.update(floor_collision=floor_collision.astype(float))
