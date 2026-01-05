@@ -664,7 +664,7 @@ class PandaPushCuboid(panda.PandaBase):
     dx = strip_half[0] - jp.abs(box_xy[0] - strip_pos[0])
     dy = strip_half[1] - jp.abs(box_xy[1] - strip_pos[1])
     # margin = jp.minimum(dx, dy)  # how far from closest edge (in meters)
-    box_on_ground = box_pos[2] <0.03
+    box_on_ground = collision.geoms_colliding(data, self._floor_geom, self._box_geom)
     in_bounds = (dx >= 0) & (dy >= 0) & box_on_ground
 
     delta = jp.linalg.norm(box_xy - prev_xy)
