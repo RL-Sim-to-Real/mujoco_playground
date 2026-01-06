@@ -103,7 +103,7 @@ def domain_randomize(
 
     strip_white = jax.random.uniform(key_strip, (), minval=0.8, maxval=1.0)
     geom_rgba = geom_rgba.at[strip_geom_id].set(
-        jp.array([strip_white, strip_white, strip_white, 0.0]) # hide the strip
+        jp.array([strip_white, strip_white, strip_white, 1.0]) 
     )
 
     # # Sample a shade of gray -- I think this is for the floor

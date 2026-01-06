@@ -354,7 +354,7 @@ class PandaPushCuboid(panda.PandaBase):
     x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02)
     target_tip_pose=jp.asarray([x_plane, 
                                   jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02), 
-                                  0.2 + jax.random.uniform(rng_plane, (), minval=-0.1, maxval=0.0)])
+                                  0.2 + jax.random.uniform(rng_plane, (), minval=-0.005, maxval=0.005)])
 
     # set initial pose to new plane
     reset_joint_pos, _, _ = self._move_tip_reset(
@@ -378,19 +378,18 @@ class PandaPushCuboid(panda.PandaBase):
     # intialize box position
     rng, rng_box = jax.random.split(rng)
     r_range = self._config.box_init_range
+    rng_box, rng_box_x, rng_box_y, rng_box_yaw = jax.random.split(rng_box, 4)
     box_pos = jp.array([
-        jax.random.uniform(rng_box, minval=0.47, maxval=0.67), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
-        jax.random.uniform(rng_box, (), minval=-0.15, maxval=0.15),
+      jax.random.uniform(rng_box_x, minval=0.47, maxval=0.67), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
+      jax.random.uniform(rng_box_y, (), minval=-0.15, maxval=0.15),
         0.0,
     ])
 
-    # randomize box orientation
-    box_orientation = jp.array([
-        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
-        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
-        jax.random.uniform(rng_box, minval=-0.1, maxval=0.1),
-    ])
-    init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 6].set(box_orientation)
+    # randomize box orientation: yaw only (rotation about world z axis)
+    yaw = jax.random.uniform(rng_box_yaw, (), minval=-0.8, maxval=0.8)
+    half = 0.5 * yaw
+    box_quat = jp.array([jp.cos(half), 0.0, 0.0, jp.sin(half)])  # [w, x, y, z]
+    init_q = init_q.at[self._obj_qposadr + 3 : self._obj_qposadr + 7].set(box_quat)
     # Fixed target position to simplify pixels-only training.
     # determine white strip x position (fall back to x_plane if unavailable)
 
@@ -417,26 +416,7 @@ class PandaPushCuboid(panda.PandaBase):
         ctrl=init_ctrl0,
     )
     
-    # reposition the white strip to be under the end effector
-    # self._white_strip_geom = self._mj_model.geom("white_strip").id
-    # self._mj_model.geom_rgba[self._white_strip_geom, 3] = 0.0 if self._config.hide_white_strip else 1.0  # Set alpha to 0 for invisibility
-    # data = data.replace(
-    #   xpos=data.xpos.at[self._white_strip_geom, 0].set(x_plane)
-    # )
 
-
-    target_quat = jp.array([1.0, 0.0, 0.0, 0.0], dtype=float)
-    data = data.replace(
-        mocap_quat=data.mocap_quat.at[self._mocap_target, :].set(target_quat)
-    )
-    if not self._vision:
-      # mocap target should not appear in the pixels observation.
-      data = data.replace(
-          mocap_pos=data.mocap_pos.at[self._mocap_target, :].set(target_pos)
-      )
-
-    # step simulator
-    # data = mjx_env.step(self._mjx_model, data, self._init_ctrl, self.n_substeps)
 
     # initialize env state and info
     metrics = {
@@ -664,7 +644,8 @@ class PandaPushCuboid(panda.PandaBase):
     dx = strip_half[0] - jp.abs(box_xy[0] - strip_pos[0])
     dy = strip_half[1] - jp.abs(box_xy[1] - strip_pos[1])
     # margin = jp.minimum(dx, dy)  # how far from closest edge (in meters)
-    box_on_ground = collision.geoms_colliding(data, self._floor_geom, self._box_geom)
+    # box_on_ground = collision.geoms_colliding(data, self._floor_geom, self._box_geom)
+    box_on_ground = box_pos[2] < 0.025
     in_bounds = (dx >= 0) & (dy >= 0) & box_on_ground
 
     delta = jp.linalg.norm(box_xy - prev_xy)
