@@ -77,7 +77,8 @@ def domain_randomize(
       'light_directional': 0,
       'light_castshadow': 0,
       'body_mass': 0,
-      'body_inertia': 0
+      'body_inertia': 0,
+      'geom_pos': 0,
   })
   rng = jax.random.key(0)
 
@@ -105,6 +106,12 @@ def domain_randomize(
     geom_rgba = geom_rgba.at[strip_geom_id].set(
         jp.array([strip_white, strip_white, strip_white, 1.0]) 
     )
+
+    geom_pos = mjx_model.geom_pos
+    key_strip_pos, key = jax.random.split(key)
+    dxy = jax.random.uniform(key_strip_pos, (2,), minval=-0.01, maxval=0.01)
+    base = mjx_model.geom_pos[strip_geom_id]
+    geom_pos = geom_pos.at[strip_geom_id].set(base + jp.array([dxy[0], dxy[1], 0.0]))
 
     # # Sample a shade of gray -- I think this is for the floor
 
@@ -185,6 +192,7 @@ def domain_randomize(
         light_castshadow,
         body_mass,
         body_inertia,
+        geom_pos,
     )
 
   (
@@ -197,6 +205,7 @@ def domain_randomize(
       light_castshadow,
       body_mass,
       body_inertia,
+      geom_pos,
   ) = rand(jax.random.split(rng, num_worlds), light_positions)
 
   mjx_model = mjx_model.tree_replace({
@@ -210,6 +219,7 @@ def domain_randomize(
       'light_castshadow': light_castshadow,
       'body_mass': body_mass,
       'body_inertia': body_inertia,
+      'geom_pos': geom_pos,
   })
 
   return mjx_model, in_axes

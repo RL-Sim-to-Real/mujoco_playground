@@ -377,11 +377,19 @@ class PandaPushCuboid(panda.PandaBase):
     
     # intialize box position
     rng, rng_box = jax.random.split(rng)
-    r_range = self._config.box_init_range
     rng_box, rng_box_x, rng_box_y, rng_box_yaw = jax.random.split(rng_box, 4)
+
+    # box pos should be within bounds of white strip
+    sid = self._mj_model.geom('white_strip').id
+    strip_half = jp.asarray(self._mj_model.geom_size[sid])[:2]   # [hx, hy]
+    strip_pos = self._mj_model.geom_pos[sid][:2] # since we can't use data.qpos before hand
+    min_x = strip_pos[0] - strip_half[0]
+    max_x = strip_pos[0] + strip_half[0]
+    min_y = strip_pos[1] - strip_half[1]
+    max_y = strip_pos[1] + strip_half[1]
     box_pos = jp.array([
-      jax.random.uniform(rng_box_x, minval=0.47, maxval=0.67), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
-      jax.random.uniform(rng_box_y, (), minval=-0.15, maxval=0.15),
+      jax.random.uniform(rng_box_x, minval=min_x, maxval=max_x), # + jax.random.uniform(rng_box, (), minval=0.05, maxval=0.05 + r_range), # randomize about white strip
+      jax.random.uniform(rng_box_y, (), minval=min_y, maxval=max_y),
         0.0,
     ])
 
@@ -393,13 +401,14 @@ class PandaPushCuboid(panda.PandaBase):
     # Fixed target position to simplify pixels-only training.
     # determine white strip x position (fall back to x_plane if unavailable)
 
-    ws_geom = self._mj_model.geom('white_strip')
-    ws_id = ws_geom.id
-    ws_pos = jp.asarray(self._mj_model.geom_pos[ws_id])
-    white_strip_x = ws_pos[0]
+    # ws_geom = self._mj_model.geom('white_strip')
+    # ws_id = ws_geom.id
+    # ws_pos = jp.asarray(self._mj_model.geom_pos[ws_id])
+    # white_strip_x = ws_pos[0]
 
     # target is white strip of line
-    target_pos = jp.array([white_strip_x, box_pos[1], box_pos[2]])
+    # target_pos = jp.array([white_strip_x, box_pos[1], box_pos[2]])
+    target_pos = jp.zeros(3)  # not used
 
 
     # initialize pipeline state
@@ -500,43 +509,43 @@ class PandaPushCuboid(panda.PandaBase):
         obs["_prop"] = _prop 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
-  def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
-    target_pos = info["target_pos"]
-    box_pos = data.xpos[self._obj_body]
-    box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
-    gripper_pos = data.site_xpos[self._gripper_site]
+  # def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
+  #   target_pos = info["target_pos"]
+  #   box_pos = data.xpos[self._obj_body]
+  #   box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
+  #   gripper_pos = data.site_xpos[self._gripper_site]
 
-    gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
-    robot_target_qpos = 1 - jp.tanh(
-        jp.linalg.norm(
-            data.qpos[self._robot_arm_qposadr]
-            - self._init_q[self._robot_arm_qposadr]
-        )
-    )
+  #   gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
+  #   robot_target_qpos = 1 - jp.tanh(
+  #       jp.linalg.norm(
+  #           data.qpos[self._robot_arm_qposadr]
+  #           - self._init_q[self._robot_arm_qposadr]
+  #       )
+  #   )
 
-    # Check for collisions with the floor
-    hand_floor_collision = [
-        collision.geoms_colliding(data, self._floor_geom, g)
-        for g in [
-            self._left_finger_geom,
-            self._right_finger_geom,
-            self._hand_geom,
-        ]
-    ]
-    floor_collision = sum(hand_floor_collision) > 0
-    no_floor_collision = (1 - floor_collision).astype(float)
+  #   # Check for collisions with the floor
+  #   hand_floor_collision = [
+  #       collision.geoms_colliding(data, self._floor_geom, g)
+  #       for g in [
+  #           self._left_finger_geom,
+  #           self._right_finger_geom,
+  #           self._hand_geom,
+  #       ]
+  #   ]
+  #   floor_collision = sum(hand_floor_collision) > 0
+  #   no_floor_collision = (1 - floor_collision).astype(float)
 
-    info["reached_box"] = 1.0 * jp.maximum(
-        info["reached_box"],
-        (jp.linalg.norm(box_pos - gripper_pos) < 0.012),
-    )
+  #   info["reached_box"] = 1.0 * jp.maximum(
+  #       info["reached_box"],
+  #       (jp.linalg.norm(box_pos - gripper_pos) < 0.012),
+  #   )
 
-    rewards = {
-        "gripper_box": gripper_box,
-        "no_floor_collision": no_floor_collision,
-        "robot_target_qpos": robot_target_qpos,
-    }
-    return rewards
+  #   rewards = {
+  #       "gripper_box": gripper_box,
+  #       "no_floor_collision": no_floor_collision,
+  #       "robot_target_qpos": robot_target_qpos,
+  #   }
+  #   return rewards
 
   
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
@@ -638,7 +647,8 @@ class PandaPushCuboid(panda.PandaBase):
 
     # In-bounds and margin-to-edge (normalized)
     sid = self._mj_model.geom('white_strip').id
-    strip_pos = jp.asarray(self._mj_model.geom_pos[sid])[:2]
+    strip_pos = data.geom_xpos[sid][:2]
+
     strip_half = jp.asarray(self._mj_model.geom_size[sid])[:2]   # [hx, hy]
 
     dx = strip_half[0] - jp.abs(box_xy[0] - strip_pos[0])
@@ -668,9 +678,7 @@ class PandaPushCuboid(panda.PandaBase):
     w_center = -0.5
     w_floor = -0.5
     reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta) + (w_floor * floor_collision)
-    # jax.debug.print("reward {}", reward)
-    # is_nan = jp.any(jp.isnan(reward))
-    # jax.lax.cond(is_nan, lambda _: jax.debug.print("reward {}", reward), lambda _: None, operand=None)
+
 
     reward = jp.clip(reward, -1e3, 1e3)
     
@@ -769,14 +777,14 @@ class PandaPushCuboid(panda.PandaBase):
         info=state.info,
     )
 
-  def _get_success(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
-    box_pos = data.xpos[self._obj_body]
-    target_pos = info['target_pos']
-    if (
-        self._vision
-    ):  # Randomized camera positions cannot see location along y line.
-      box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
-    return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+  # def _get_success(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
+  #   box_pos = data.xpos[self._obj_body]
+  #   target_pos = info['target_pos']
+  #   if (
+  #       self._vision
+  #   ):  # Randomized camera positions cannot see location along y line.
+  #     box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
+  #   return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
   
   def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 

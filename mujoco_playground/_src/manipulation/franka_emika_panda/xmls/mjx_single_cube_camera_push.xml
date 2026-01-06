@@ -41,8 +41,8 @@
     <!-- Matching the Realsense D435 -->
     <!-- <camera fovy="42" name="front" pos="1.176 0.001 0.483" xyaxes="0.006 1.000 -0.000 -0.720 0.004 0.694"/> -->
     <geom name="floor" size="0 0 0.05" type="plane" material="custom_wood" contype="1"/>
-    <!-- A4 paper sized white strip for visual purposes -->
-    <geom name="white_strip" size="0.105 0.15 0.001" type="plane" pos="0.57 0 0.001" rgba="1 1 1 1" contype="0" conaffinity="0"/> 
+    <!--  white strip (base) for visual purposes -->
+    <geom name="white_strip" size="0.10795 0.1397 0.001" type="plane" pos="0.57 0 0.001" rgba="1 1 1 1" contype="0" conaffinity="0"/> 
     <body name="box" pos="1 0 0.03">
       <freejoint/>
       <geom type="box" name="box" size="0.03 0.02 0.02" condim="3"
