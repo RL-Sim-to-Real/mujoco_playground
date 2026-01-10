@@ -311,14 +311,14 @@ class PandaPushCuboid(panda.PandaBase):
     # Expand floor size to non-zero so Madrona can render it
     mj_model.geom_size[mj_model.geom('floor').id, :2] = [5.0, 5.0]
 
-    # # Make the finger pads white for increased visibility
-    # mesh_id = mj_model.mesh('finger_1').id
-    # geoms = [
-    #     idx
-    #     for idx, data_id in enumerate(mj_model.geom_dataid)
-    #     if data_id == mesh_id
-    # ]
-    # mj_model.geom_matid[geoms] = mj_model.mat('black').id
+    # Make the finger pads white for increased visibility
+    mesh_id = mj_model.mesh('finger_1').id
+    geoms = [
+        idx
+        for idx, data_id in enumerate(mj_model.geom_dataid)
+        if data_id == mesh_id
+    ]
+    mj_model.geom_matid[geoms] = mj_model.mat('off_white').id
     return mj_model
 
   def _jnt_range(self):
@@ -348,7 +348,7 @@ class PandaPushCuboid(panda.PandaBase):
   def reset(self, rng: jax.Array) -> mjx_env.State:
     """Resets the environment to an initial state."""
     # x_plane = self._start_tip_transform[0, 3] - 0.03 # Account for finite gain and 0.05 for real position
-    x_plane = 0.55 # position in real world
+    x_plane = 0.57 # position in real world
     # randomize end effector position
     rng, rng_plane = jax.random.split(rng)
     x_plane = x_plane + jax.random.uniform(rng_plane, (), minval=-0.02, maxval=0.02)
