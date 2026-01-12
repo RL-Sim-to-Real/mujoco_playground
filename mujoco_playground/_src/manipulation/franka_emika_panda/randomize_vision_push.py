@@ -79,6 +79,9 @@ def domain_randomize(
       'body_mass': 0,
       'body_inertia': 0,
       'geom_pos': 0,
+      'geom_friction': 0,
+      'actuator_gainprm': 0,
+      'actuator_biasprm': 0,
   })
   rng = jax.random.key(0)
 
@@ -109,9 +112,16 @@ def domain_randomize(
 
     geom_pos = mjx_model.geom_pos
     key_strip_pos, key = jax.random.split(key)
-    dxy = jax.random.uniform(key_strip_pos, (2,), minval=-0.01, maxval=0.01)
+    dxy = jax.random.uniform(key_strip_pos, (2,), minval=-0.02, maxval=0.02)
     base = mjx_model.geom_pos[strip_geom_id]
     geom_pos = geom_pos.at[strip_geom_id].set(base + jp.array([dxy[0], dxy[1], 0.0]))
+
+    ## Randomize friction of the box ##
+    geom_friction = mjx_model.geom_friction
+    key_fric, key = jax.random.split(key)
+    scale = jax.random.uniform(key_fric, (), minval=1.0, maxval=2.0)
+    base = geom_friction[box_geom_id, 0]  
+    geom_friction = geom_friction.at[box_geom_id, 0].set(base * scale)
 
     # # Sample a shade of gray -- I think this is for the floor
 
@@ -182,6 +192,31 @@ def domain_randomize(
         mjx_model.body_inertia[box_body_id] * mass_scale
     )
 
+    ## Randomize actuator gains ##
+    ## WARNING: Experimental - may destabilize the simulation ##
+    # --- Actuator gains (kp / kv via actuator_gainprm[:, 0]) ---
+    base_gain = mjx_model.actuator_gainprm[:, 0]
+    has_gain = base_gain != 0            # only actuators that actually use this param
+
+    key_gain, key = jax.random.split(key)
+    gain_scale = jax.random.uniform(key_gain, (), minval=0.9, maxval=1.1)
+
+    scaled_gain = base_gain * jp.where(has_gain, gain_scale, 1.0)
+    actuator_gainprm = mjx_model.actuator_gainprm.at[:, 0].set(scaled_gain)
+
+    # if you want to also scale any bias terms that depend on kp/kv:
+    actuator_biasprm = mjx_model.actuator_biasprm
+    # scale -kp
+    base_bias = actuator_biasprm[:, 1]
+    has_bias = base_bias != 0
+    scaled_bias = base_bias * jp.where(has_bias, gain_scale, 1.0)
+    actuator_biasprm = actuator_biasprm.at[:, 1].set(scaled_bias)
+    # scale -kv
+    base_bias = actuator_biasprm[:, 2]
+    has_bias = base_bias != 0
+    scaled_bias = base_bias * jp.where(has_bias, gain_scale, 1.0)
+    actuator_biasprm = actuator_biasprm.at[:, 2].set(scaled_bias)
+
     return (
         geom_rgba,
         geom_matid,
@@ -193,6 +228,9 @@ def domain_randomize(
         body_mass,
         body_inertia,
         geom_pos,
+        geom_friction,
+        actuator_gainprm,
+        actuator_biasprm,
     )
 
   (
@@ -206,6 +244,9 @@ def domain_randomize(
       body_mass,
       body_inertia,
       geom_pos,
+      geom_friction,
+      actuator_gainprm,
+      actuator_biasprm,
   ) = rand(jax.random.split(rng, num_worlds), light_positions)
 
   mjx_model = mjx_model.tree_replace({
@@ -220,6 +261,9 @@ def domain_randomize(
       'body_mass': body_mass,
       'body_inertia': body_inertia,
       'geom_pos': geom_pos,
+      'geom_friction': geom_friction,
+      'actuator_gainprm': actuator_gainprm,
+      'actuator_biasprm': actuator_biasprm,
   })
 
   return mjx_model, in_axes

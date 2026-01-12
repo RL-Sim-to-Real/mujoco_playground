@@ -491,7 +491,7 @@ class PandaPushCuboid(panda.PandaBase):
 
       if self._proprioception:
 
-        ee_height = data.xpos[self._left_finger_geom][2]
+        ee_height = data.xpos[self._left_finger_geom][2] + jax.random.normal(rng, ()) * 0.01
         joint_p = data.qpos[:7] + jax.random.normal(rng, 7) * 0.1
         normalized_jp = 2 * (joint_p - jp.array(self._jnt_range())[:, 0]) / (
           jp.array(self._jnt_range())[:, 1] - jp.array(self._jnt_range())[:, 0]
@@ -509,45 +509,8 @@ class PandaPushCuboid(panda.PandaBase):
         obs["_prop"] = _prop 
     return mjx_env.State(data, obs, reward, done, metrics, info)
   
-  # def _get_reward(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, Any]:
-  #   target_pos = info["target_pos"]
-  #   box_pos = data.xpos[self._obj_body]
-  #   box_pos = box_pos.at[0].add(-0.03) # reach for the back of the box
-  #   gripper_pos = data.site_xpos[self._gripper_site]
 
-  #   gripper_box = 1 - jp.tanh(5 * jp.linalg.norm(box_pos - gripper_pos))
-  #   robot_target_qpos = 1 - jp.tanh(
-  #       jp.linalg.norm(
-  #           data.qpos[self._robot_arm_qposadr]
-  #           - self._init_q[self._robot_arm_qposadr]
-  #       )
-  #   )
 
-  #   # Check for collisions with the floor
-  #   hand_floor_collision = [
-  #       collision.geoms_colliding(data, self._floor_geom, g)
-  #       for g in [
-  #           self._left_finger_geom,
-  #           self._right_finger_geom,
-  #           self._hand_geom,
-  #       ]
-  #   ]
-  #   floor_collision = sum(hand_floor_collision) > 0
-  #   no_floor_collision = (1 - floor_collision).astype(float)
-
-  #   info["reached_box"] = 1.0 * jp.maximum(
-  #       info["reached_box"],
-  #       (jp.linalg.norm(box_pos - gripper_pos) < 0.012),
-  #   )
-
-  #   rewards = {
-  #       "gripper_box": gripper_box,
-  #       "no_floor_collision": no_floor_collision,
-  #       "robot_target_qpos": robot_target_qpos,
-  #   }
-  #   return rewards
-
-  
   def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
     gripper_pos = data.site_xpos[self._gripper_site]
     gripper_mat = data.site_xmat[self._gripper_site].ravel()
@@ -676,7 +639,7 @@ class PandaPushCuboid(panda.PandaBase):
     ee_pos = data.site_xpos[self._gripper_site]
     center_delta = jp.linalg.norm(box_pos - ee_pos)
     w_center = -0.5
-    w_floor = -0.5
+    w_floor = -0.1
     reward = in_bounds.astype(jp.float32) * (w_move * delta) + (w_center * center_delta) + (w_floor * floor_collision)
 
 
@@ -707,19 +670,12 @@ class PandaPushCuboid(panda.PandaBase):
     
     
     state.metrics.update(floor_collision=floor_collision.astype(float))
-    # state.metrics.update(success=success.astype(float))
-    # state.metrics.update({f'reward/{k}': v for k, v in raw_rewards.items()})
-    # state.metrics.update({
-    #     'reward/success': (success * self._config.reward_config.success_reward).astype(float),
-    # })
+
     done = (
         out_of_bounds
         | jp.isnan(data.qpos).any()
         | jp.isnan(data.qvel).any()
     )
-    # jax.debug.print("Done: {}", done)
-    # jax.debug.print("out of bounds: {}", out_of_bounds)
-    # jax.debug.print("success: {}", success)
 
     # Ensure exact sync between newly_reset and the autoresetwrapper.
     state.info['_steps'] += self._config.action_repeat
@@ -752,7 +708,7 @@ class PandaPushCuboid(panda.PandaBase):
       if self._proprioception:
         state.info['rng'], rng_prop = jax.random.split(state.info['rng'])
 
-        ee_height = data.xpos[self._left_finger_geom][2]
+        ee_height = data.xpos[self._left_finger_geom][2] + jax.random.normal(rng_prop, ()) * 0.01
         joint_p = data.qpos[:7] + jax.random.normal(rng_prop, 7) * 0.1
         joint_v = data.qvel[:7] + jax.random.normal(rng_prop, 7) * 0.1
         normalized_jv = 2 * (joint_v - jp.array(self._jnt_vel_range())[:, 0]) / (
@@ -777,14 +733,7 @@ class PandaPushCuboid(panda.PandaBase):
         info=state.info,
     )
 
-  # def _get_success(self, data: mjx.Data, info: dict[str, Any]) -> jax.Array:
-  #   box_pos = data.xpos[self._obj_body]
-  #   target_pos = info['target_pos']
-  #   if (
-  #       self._vision
-  #   ):  # Randomized camera positions cannot see location along y line.
-  #     box_pos, target_pos = box_pos[0], target_pos[0] # target X positions
-  #   return jp.linalg.norm(box_pos - target_pos) < self._config.success_threshold
+
   
   def _move_tip_reset(self, 
                       target_tip_pose: jax.Array, 
