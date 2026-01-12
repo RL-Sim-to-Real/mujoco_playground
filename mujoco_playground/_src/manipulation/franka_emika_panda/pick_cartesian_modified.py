@@ -313,14 +313,14 @@ class PandaPickCuboid(pick.PandaPickCube):
     # Expand floor size to non-zero so Madrona can render it
     mj_model.geom_size[mj_model.geom('floor').id, :2] = [5.0, 5.0]
 
-    # # Make the finger pads white for increased visibility
-    # mesh_id = mj_model.mesh('finger_1').id
-    # geoms = [
-    #     idx
-    #     for idx, data_id in enumerate(mj_model.geom_dataid)
-    #     if data_id == mesh_id
-    # ]
-    # mj_model.geom_matid[geoms] = mj_model.mat('black').id
+    # Make the finger pads white for increased visibility
+    mesh_id = mj_model.mesh('finger_1').id
+    geoms = [
+        idx
+        for idx, data_id in enumerate(mj_model.geom_dataid)
+        if data_id == mesh_id
+    ]
+    mj_model.geom_matid[geoms] = mj_model.mat('off_white').id
     return mj_model
 
   def _jnt_range(self):
@@ -425,7 +425,7 @@ class PandaPickCuboid(pick.PandaPickCube):
     metrics = {
         'floor_collision': jp.array(0.0, dtype=float),
         'cube_collision': jp.array(0.0),
-        'jerk': jp.array(0.0),
+        'jerk_per_step': jp.array(0.0),
         'success': jp.array(0.0),
         'out_of_bounds': jp.array(0.0),
         **{
@@ -645,7 +645,7 @@ class PandaPickCuboid(pick.PandaPickCube):
     state.info['prev_qacc'] = current_qacc
     
     # Update metrics
-    state.metrics.update(jerk=jerk.astype(float))
+    state.metrics.update(jerk_per_step=jerk.astype(float))
     
     floor_collision = sum(hand_floor_collision) > 0
     state.metrics.update(floor_collision=floor_collision.astype(float))
